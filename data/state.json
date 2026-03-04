@@ -1,0 +1,160 @@
+{
+  "users": {
+    "U_demo": {
+      "id": "U_demo",
+      "createdAt": "2026-03-04T03:59:44.652Z",
+      "lastSeenAt": "2026-03-04T03:59:44.676Z"
+    }
+  },
+  "tasks": [
+    {
+      "id": "task_a7df0c4472c2",
+      "title": "企画書作成",
+      "status": "todo",
+      "priority": 3,
+      "estimateMin": 45,
+      "scheduledStart": "2026-03-04T00:00:00.000Z",
+      "scheduledEnd": "2026-03-04T00:45:00.000Z",
+      "dueAt": null,
+      "project": null,
+      "source": "line",
+      "createdAt": "2026-03-04T03:59:44.668Z",
+      "updatedAt": "2026-03-04T03:59:44.673Z"
+    }
+  ],
+  "scheduleBlocks": [],
+  "reminderJobs": [
+    {
+      "id": "job_a67f990fcbc8",
+      "status": "pending",
+      "createdAt": "2026-03-04T03:59:44.673Z",
+      "attempts": 0,
+      "taskId": "task_a7df0c4472c2",
+      "kind": "start",
+      "scheduledAt": "2026-03-04T00:00:00.000Z",
+      "payload": {
+        "title": "企画書作成"
+      }
+    },
+    {
+      "id": "job_3f02bb24a3b1",
+      "status": "pending",
+      "createdAt": "2026-03-04T03:59:44.673Z",
+      "attempts": 0,
+      "taskId": "task_a7df0c4472c2",
+      "kind": "end_check",
+      "scheduledAt": "2026-03-04T00:45:00.000Z",
+      "payload": {
+        "title": "企画書作成"
+      }
+    },
+    {
+      "id": "job_6df39386baca",
+      "status": "pending",
+      "createdAt": "2026-03-04T03:59:44.673Z",
+      "attempts": 0,
+      "taskId": "task_a7df0c4472c2",
+      "kind": "nudge1",
+      "scheduledAt": "2026-03-04T00:55:00.000Z",
+      "payload": {
+        "title": "企画書作成"
+      }
+    },
+    {
+      "id": "job_9fbdcffbd538",
+      "status": "pending",
+      "createdAt": "2026-03-04T03:59:44.673Z",
+      "attempts": 0,
+      "taskId": "task_a7df0c4472c2",
+      "kind": "nudge2",
+      "scheduledAt": "2026-03-04T01:15:00.000Z",
+      "payload": {
+        "title": "企画書作成"
+      }
+    }
+  ],
+  "dailyPlans": {
+    "2026-03-04": {
+      "date": "2026-03-04",
+      "blocks": [
+        {
+          "taskId": "task_a7df0c4472c2",
+          "title": "企画書作成",
+          "startAt": "2026-03-04T00:00:00.000Z",
+          "endAt": "2026-03-04T00:45:00.000Z",
+          "estimateMin": 45,
+          "status": "planned"
+        }
+      ],
+      "confirmed": true,
+      "updatedAt": "2026-03-04T03:59:44.672Z",
+      "confirmedAt": "2026-03-04T03:59:44.672Z"
+    }
+  },
+  "changeRequests": [
+    {
+      "id": "cr_ab66c4391e05",
+      "requestedAt": "2026-03-04T03:59:44.674Z",
+      "status": "applied",
+      "userId": "U_demo",
+      "intent": "remember",
+      "riskLevel": "low",
+      "payload": {
+        "type": "remember",
+        "memoryText": "午後は会議後30分バッファ"
+      },
+      "appliedAt": "2026-03-04T03:59:44.674Z"
+    },
+    {
+      "id": "cr_9723bc50789a",
+      "requestedAt": "2026-03-04T03:59:44.675Z",
+      "status": "applied",
+      "userId": "U_demo",
+      "intent": "rollback",
+      "riskLevel": "low",
+      "payload": {
+        "type": "rollback"
+      },
+      "appliedAt": "2026-03-04T03:59:44.675Z"
+    },
+    {
+      "id": "cr_213371bda1b1",
+      "requestedAt": "2026-03-04T03:59:44.675Z",
+      "status": "rejected",
+      "userId": "U_demo",
+      "intent": "forget",
+      "riskLevel": "high",
+      "payload": {
+        "type": "forget",
+        "keyword": ""
+      },
+      "approvedBy": "U_demo",
+      "approvedAt": "2026-03-04T03:59:44.676Z",
+      "resultMessage": "忘却対象のキーワードが空です。例: 忘れて: 夜の重作業ルール"
+    }
+  ],
+  "memoryRevisions": [
+    {
+      "id": "rev_000001",
+      "createdAt": "2026-03-04T03:59:44.674Z",
+      "filePath": "MEMORY.md",
+      "before": "",
+      "after": "\n- 午後は会議後30分バッファ\n",
+      "reason": "remember",
+      "actor": "U_demo"
+    },
+    {
+      "id": "rev_000002",
+      "createdAt": "2026-03-04T03:59:44.675Z",
+      "filePath": "MEMORY.md",
+      "before": "\n- 午後は会議後30分バッファ\n",
+      "after": "",
+      "reason": "rollback:rev_000001",
+      "actor": "U_demo"
+    }
+  ],
+  "runtimePrefs": {},
+  "meta": {
+    "lastRevision": 2
+  }
+}

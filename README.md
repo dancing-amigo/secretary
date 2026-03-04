@@ -122,7 +122,7 @@ Vercel Hobby制限のため、定期実行はGitHub Actionsで行います。
 
 - `.github/workflows/secretary-cron.yml`
   - 毎時: `/api/jobs/morning` と `/api/jobs/night`
-  - 5分ごと: `/api/jobs/reminder-tick`
+  - 15分ごと: `/api/jobs/reminder-tick`
 
 ### 必要なGitHub Secrets
 
@@ -134,3 +134,8 @@ Vercel Hobby制限のため、定期実行はGitHub Actionsで行います。
 - `CRON_SECRET` を `SECRETARY_CRON_SECRET` と同じ値に設定
 
 これで外部からのジョブ呼び出しを認証付きで実行できます。
+
+## 9. リマインダー送信時間
+
+- リマインダー送信は `America/Vancouver` で **08:00〜21:59** のみ実行
+- 22:00以降〜07:59の間に期限が来たリマインダージョブは `skipped (quiet_hours)` として送信しません

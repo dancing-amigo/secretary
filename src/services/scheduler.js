@@ -32,6 +32,11 @@ function isLocalClock(targetHour) {
   return now.hour === targetHour;
 }
 
+function isWithinReminderWindow() {
+  const now = DateTime.now().setZone(config.tz);
+  return now.hour >= 8 && now.hour < 22;
+}
+
 export async function runMorningJob({ enforceLocalClock = false } = {}) {
   if (enforceLocalClock && !isLocalClock(8)) return { skipped: true, reason: 'not 08:00 local hour' };
   const users = targetUsers();
@@ -59,8 +64,19 @@ export async function runReminderTick() {
   let sent = 0;
   let skipped = 0;
   let failed = 0;
+  const withinWindow = isWithinReminderWindow();
 
   for (const job of due) {
+    if (!withinWindow) {
+      store.markReminderJob(job.id, {
+        status: 'skipped',
+        attempts: (job.attempts || 0) + 1,
+        reason: 'quiet_hours'
+      });
+      skipped += 1;
+      continue;
+    }
+
     if (shouldSkipJob(job)) {
       store.markReminderJob(job.id, { status: 'skipped', attempts: (job.attempts || 0) + 1 });
       skipped += 1;
@@ -87,7 +103,7 @@ export async function runReminderTick() {
     }
   }
 
-  return { due: due.length, sent, skipped, failed };
+  return { due: due.length, sent, skipped, failed, withinWindow };
 }
 
 export function startSchedulers() {

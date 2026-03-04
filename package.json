@@ -12,6 +12,7 @@
     "axios": "^1.8.4",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "googleapis": "^171.4.0",
     "luxon": "^3.7.2",
     "node-cron": "^3.0.3"
   }

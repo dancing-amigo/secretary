@@ -1,160 +1,156 @@
 {
   "users": {
-    "U_demo": {
-      "id": "U_demo",
-      "createdAt": "2026-03-04T03:59:44.652Z",
-      "lastSeenAt": "2026-03-04T03:59:44.676Z"
+    "U_case": {
+      "id": "U_case",
+      "createdAt": "2026-03-04T04:46:16.902Z",
+      "lastSeenAt": "2026-03-04T04:46:17.189Z"
+    },
+    "U_localtest": {
+      "id": "U_localtest",
+      "createdAt": "2026-03-04T04:58:39.482Z",
+      "lastSeenAt": "2026-03-04T04:58:39.661Z"
+    },
+    "U_case2": {
+      "id": "U_case2",
+      "createdAt": "2026-03-04T06:03:19.386Z",
+      "lastSeenAt": "2026-03-04T06:03:19.782Z"
+    },
+    "U_llm": {
+      "id": "U_llm",
+      "createdAt": "2026-03-04T06:15:42.668Z",
+      "lastSeenAt": "2026-03-04T06:15:46.698Z"
     }
   },
   "tasks": [
     {
-      "id": "task_a7df0c4472c2",
-      "title": "企画書作成",
+      "id": "task_9b108e88eb72",
+      "userId": "U_case",
+      "title": "あと寝る前にcpsc406の勉強",
       "status": "todo",
       "priority": 3,
       "estimateMin": 45,
-      "scheduledStart": "2026-03-04T00:00:00.000Z",
-      "scheduledEnd": "2026-03-04T00:45:00.000Z",
+      "scheduledStart": "2026-03-03T17:00:00.000Z",
+      "scheduledEnd": "2026-03-03T17:45:00.000Z",
       "dueAt": null,
       "project": null,
       "source": "line",
-      "createdAt": "2026-03-04T03:59:44.668Z",
-      "updatedAt": "2026-03-04T03:59:44.673Z"
+      "createdAt": "2026-03-04T04:46:17.079Z",
+      "updatedAt": "2026-03-04T04:46:17.262Z"
+    },
+    {
+      "id": "task_08831794dd9d",
+      "userId": "U_localtest",
+      "title": "cpsc406の勉強",
+      "status": "todo",
+      "priority": 3,
+      "estimateMin": 45,
+      "scheduledStart": null,
+      "scheduledEnd": null,
+      "dueAt": null,
+      "project": null,
+      "source": "line",
+      "createdAt": "2026-03-04T04:58:39.660Z",
+      "updatedAt": "2026-03-04T04:58:39.660Z"
+    },
+    {
+      "id": "task_a4252b47389a",
+      "userId": "U_case2",
+      "title": "cpsc406の勉強",
+      "status": "todo",
+      "priority": 3,
+      "estimateMin": 60,
+      "scheduledStart": null,
+      "scheduledEnd": null,
+      "dueAt": null,
+      "project": null,
+      "source": "line",
+      "createdAt": "2026-03-04T06:03:19.593Z",
+      "updatedAt": "2026-03-04T06:03:19.782Z"
+    },
+    {
+      "id": "task_0ecaa67ac0ab",
+      "userId": "U_llm",
+      "title": "cpsc406の勉強",
+      "status": "todo",
+      "priority": 3,
+      "estimateMin": 60,
+      "scheduledStart": null,
+      "scheduledEnd": null,
+      "dueAt": null,
+      "project": null,
+      "source": "line",
+      "createdAt": "2026-03-04T06:15:42.869Z",
+      "updatedAt": "2026-03-04T06:15:45.842Z"
     }
   ],
   "scheduleBlocks": [],
-  "reminderJobs": [
-    {
-      "id": "job_a67f990fcbc8",
-      "status": "pending",
-      "createdAt": "2026-03-04T03:59:44.673Z",
-      "attempts": 0,
-      "taskId": "task_a7df0c4472c2",
-      "kind": "start",
-      "scheduledAt": "2026-03-04T00:00:00.000Z",
-      "payload": {
-        "title": "企画書作成"
-      }
-    },
-    {
-      "id": "job_3f02bb24a3b1",
-      "status": "pending",
-      "createdAt": "2026-03-04T03:59:44.673Z",
-      "attempts": 0,
-      "taskId": "task_a7df0c4472c2",
-      "kind": "end_check",
-      "scheduledAt": "2026-03-04T00:45:00.000Z",
-      "payload": {
-        "title": "企画書作成"
-      }
-    },
-    {
-      "id": "job_6df39386baca",
-      "status": "pending",
-      "createdAt": "2026-03-04T03:59:44.673Z",
-      "attempts": 0,
-      "taskId": "task_a7df0c4472c2",
-      "kind": "nudge1",
-      "scheduledAt": "2026-03-04T00:55:00.000Z",
-      "payload": {
-        "title": "企画書作成"
-      }
-    },
-    {
-      "id": "job_9fbdcffbd538",
-      "status": "pending",
-      "createdAt": "2026-03-04T03:59:44.673Z",
-      "attempts": 0,
-      "taskId": "task_a7df0c4472c2",
-      "kind": "nudge2",
-      "scheduledAt": "2026-03-04T01:15:00.000Z",
-      "payload": {
-        "title": "企画書作成"
-      }
-    }
-  ],
+  "reminderJobs": [],
   "dailyPlans": {
-    "2026-03-04": {
+    "U_case:2026-03-04": {
+      "userId": "U_case",
       "date": "2026-03-04",
       "blocks": [
         {
-          "taskId": "task_a7df0c4472c2",
-          "title": "企画書作成",
-          "startAt": "2026-03-04T00:00:00.000Z",
-          "endAt": "2026-03-04T00:45:00.000Z",
+          "taskId": "task_9b108e88eb72",
+          "title": "あと寝る前にcpsc406の勉強",
+          "startAt": "2026-03-03T17:00:00.000Z",
+          "endAt": "2026-03-03T17:45:00.000Z",
           "estimateMin": 45,
           "status": "planned"
         }
       ],
-      "confirmed": true,
-      "updatedAt": "2026-03-04T03:59:44.672Z",
-      "confirmedAt": "2026-03-04T03:59:44.672Z"
+      "confirmed": false,
+      "updatedAt": "2026-03-04T04:46:17.262Z"
     }
   },
-  "changeRequests": [
-    {
-      "id": "cr_ab66c4391e05",
-      "requestedAt": "2026-03-04T03:59:44.674Z",
-      "status": "applied",
-      "userId": "U_demo",
-      "intent": "remember",
-      "riskLevel": "low",
-      "payload": {
-        "type": "remember",
-        "memoryText": "午後は会議後30分バッファ"
-      },
-      "appliedAt": "2026-03-04T03:59:44.674Z"
-    },
-    {
-      "id": "cr_9723bc50789a",
-      "requestedAt": "2026-03-04T03:59:44.675Z",
-      "status": "applied",
-      "userId": "U_demo",
-      "intent": "rollback",
-      "riskLevel": "low",
-      "payload": {
-        "type": "rollback"
-      },
-      "appliedAt": "2026-03-04T03:59:44.675Z"
-    },
-    {
-      "id": "cr_213371bda1b1",
-      "requestedAt": "2026-03-04T03:59:44.675Z",
-      "status": "rejected",
-      "userId": "U_demo",
-      "intent": "forget",
-      "riskLevel": "high",
-      "payload": {
-        "type": "forget",
-        "keyword": ""
-      },
-      "approvedBy": "U_demo",
-      "approvedAt": "2026-03-04T03:59:44.676Z",
-      "resultMessage": "忘却対象のキーワードが空です。例: 忘れて: 夜の重作業ルール"
-    }
-  ],
-  "memoryRevisions": [
-    {
-      "id": "rev_000001",
-      "createdAt": "2026-03-04T03:59:44.674Z",
-      "filePath": "MEMORY.md",
-      "before": "",
-      "after": "\n- 午後は会議後30分バッファ\n",
-      "reason": "remember",
-      "actor": "U_demo"
-    },
-    {
-      "id": "rev_000002",
-      "createdAt": "2026-03-04T03:59:44.675Z",
-      "filePath": "MEMORY.md",
-      "before": "\n- 午後は会議後30分バッファ\n",
-      "after": "",
-      "reason": "rollback:rev_000001",
-      "actor": "U_demo"
-    }
-  ],
+  "changeRequests": [],
+  "memoryRevisions": [],
   "runtimePrefs": {},
+  "conversations": {
+    "U_llm": [
+      {
+        "at": "2026-03-04T06:15:42.683Z",
+        "role": "user",
+        "text": "今日はあと寝る前にcpsc406の勉強をするだけです"
+      },
+      {
+        "at": "2026-03-04T06:15:44.447Z",
+        "role": "assistant",
+        "text": "タスクを追加しました: cpsc406の勉強（task_0ecaa67ac0ab）"
+      },
+      {
+        "at": "2026-03-04T06:15:44.449Z",
+        "role": "user",
+        "text": "いいね"
+      },
+      {
+        "at": "2026-03-04T06:15:45.781Z",
+        "role": "assistant",
+        "text": "ありがとうございます。残りは「cpsc406の勉強」だけです。必要なら次の着手タイミングも決めます。"
+      },
+      {
+        "at": "2026-03-04T06:15:45.782Z",
+        "role": "user",
+        "text": "その見積もり60分にして"
+      },
+      {
+        "at": "2026-03-04T06:15:46.698Z",
+        "role": "assistant",
+        "text": "見積もりを更新しました: cpsc406の勉強 を 60分に設定しました。"
+      },
+      {
+        "at": "2026-03-04T06:15:46.699Z",
+        "role": "user",
+        "text": "今あるタスク教えて"
+      },
+      {
+        "at": "2026-03-04T06:15:47.820Z",
+        "role": "assistant",
+        "text": "未完了タスク一覧:\n1. cpsc406の勉強 / 優先度3 / 見積60分 / 状態todo"
+      }
+    ]
+  },
   "meta": {
-    "lastRevision": 2
+    "lastRevision": 0
   }
 }

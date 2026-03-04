@@ -5,8 +5,9 @@ import { config } from '../config.js';
 import { DateTime } from 'luxon';
 
 function toRange(dateObj, minutes) {
-  const start = dateObj.toISOString();
-  const end = addMinutes(start, minutes);
+  const safeDate = Number.isFinite(dateObj?.getTime?.()) ? dateObj : new Date();
+  const start = safeDate.toISOString();
+  const end = addMinutes(start, minutes) || new Date(safeDate.getTime() + minutes * 60 * 1000).toISOString();
   return { start, end };
 }
 
@@ -32,14 +33,20 @@ function nextAvailableStart(cursor, durationMin, blockedRanges) {
 
 function todayWindow() {
   const now = DateTime.now().setZone(config.tz);
-  const start = now.startOf('day').plus({ hours: 9 });
-  const end = now.startOf('day').plus({ hours: 22 });
+  const base = now.isValid ? now : DateTime.now().setZone('America/Vancouver');
+  if (!now.isValid) {
+    // eslint-disable-next-line no-console
+    console.error('[invalid-timezone]', config.tz);
+  }
+  const start = base.startOf('day').plus({ hours: 9 });
+  const end = base.startOf('day').plus({ hours: 22 });
   return { start: start.toUTC().toJSDate(), end: end.toUTC().toJSDate() };
 }
 
-export async function buildDailyPlan({ maxTasks = 8 } = {}) {
+export async function buildDailyPlan({ userId, maxTasks = 8 } = {}) {
+  if (!userId) return { date: formatYmd(new Date()), blocks: [] };
   const tasks = store
-    .listOpenTasks()
+    .listOpenTasks(userId)
     .filter((t) => t.status !== 'done' && t.status !== 'canceled')
     .sort((a, b) => {
       const pr = (b.priority || 3) - (a.priority || 3);
@@ -78,8 +85,8 @@ export async function buildDailyPlan({ maxTasks = 8 } = {}) {
   }
 
   const date = formatYmd(new Date());
-  store.replacePlan(date, blocks, false);
-  return { date, blocks };
+  store.replacePlan(userId, date, blocks, false);
+  return { userId, date, blocks };
 }
 
 export function renderPlanTable(plan) {

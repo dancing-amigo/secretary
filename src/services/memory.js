@@ -1,38 +1,53 @@
 import fs from 'fs';
 import path from 'path';
 import { store } from './store.js';
+import { ensureRuntimeSeeded, runtimePath, sourcePath } from './runtimeFs.js';
 
-const root = process.cwd();
-const memoryRoot = path.join(root, 'memory');
+ensureRuntimeSeeded();
+
+const memoryRoot = runtimePath('memory');
 
 function abs(relPath) {
   return path.join(memoryRoot, relPath);
 }
 
+function sourceAbs(relPath) {
+  return sourcePath('memory', relPath);
+}
+
 function appendLine(filePath, line) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${line}\n`);
 }
 
-function safeRead(filePath) {
-  if (!fs.existsSync(filePath)) return '';
-  return fs.readFileSync(filePath, 'utf8');
+function safeRead(filePath, fallbackPath = null) {
+  if (fs.existsSync(filePath)) return fs.readFileSync(filePath, 'utf8');
+  if (fallbackPath && fs.existsSync(fallbackPath)) return fs.readFileSync(fallbackPath, 'utf8');
+  return '';
 }
 
 export function logConversationLine(date, line) {
   const p = abs(`40_logs/conversations/${date}.md`);
-  if (!fs.existsSync(p)) fs.writeFileSync(p, `# ${date}\n\n`);
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, `# ${date}\n\n`);
+  }
   appendLine(p, line);
 }
 
 export function logDailyLine(date, line) {
   const p = abs(`40_logs/daily/${date}.md`);
-  if (!fs.existsSync(p)) fs.writeFileSync(p, `# ${date}\n\n`);
+  if (!fs.existsSync(p)) {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, `# ${date}\n\n`);
+  }
   appendLine(p, line);
 }
 
 function writeWithRevision(relPath, after, reason, actor = 'user') {
   const p = abs(relPath);
-  const before = safeRead(p);
+  const before = safeRead(p, sourceAbs(relPath));
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, after);
   const rev = store.addMemoryRevision({
     filePath: relPath,
@@ -47,14 +62,14 @@ function writeWithRevision(relPath, after, reason, actor = 'user') {
 
 export function appendMemoryFact(text, reason = 'remember', actor = 'user') {
   const relPath = 'MEMORY.md';
-  const current = safeRead(abs(relPath));
+  const current = safeRead(abs(relPath), sourceAbs(relPath));
   const after = `${current.trimEnd()}\n- ${text}\n`;
   return writeWithRevision(relPath, after, reason, actor);
 }
 
 export function forgetMemoryFact(keyword, actor = 'user') {
   const relPath = 'MEMORY.md';
-  const current = safeRead(abs(relPath));
+  const current = safeRead(abs(relPath), sourceAbs(relPath));
   const lines = current.split('\n');
   const filtered = lines.filter((l) => !l.includes(keyword));
   const after = filtered.join('\n').replace(/\n+$/, '\n');
@@ -63,7 +78,7 @@ export function forgetMemoryFact(keyword, actor = 'user') {
 
 export function tuneRule(line, actor = 'user') {
   const relPath = '60_adaptation/USER_EDITABLE_RULES.md';
-  const current = safeRead(abs(relPath));
+  const current = safeRead(abs(relPath), sourceAbs(relPath));
   const after = `${current.trimEnd()}\n- ${line}\n`;
   return writeWithRevision(relPath, after, `tune:${line}`, actor);
 }
@@ -73,7 +88,8 @@ export function rollbackLastRevision(actor = 'user') {
   if (!latest) return null;
   const relPath = latest.filePath;
   const p = abs(relPath);
-  const current = safeRead(p);
+  const current = safeRead(p, sourceAbs(relPath));
+  fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, latest.before || '');
   const rev = store.addMemoryRevision({
     filePath: relPath,
@@ -95,6 +111,6 @@ export function summarizeCoreMemory() {
     'MEMORY.md'
   ];
   return files
-    .map((f) => `## ${f}\n${safeRead(abs(f)).slice(0, 1500)}`)
+    .map((f) => `## ${f}\n${safeRead(abs(f), sourceAbs(f)).slice(0, 1500)}`)
     .join('\n\n');
 }

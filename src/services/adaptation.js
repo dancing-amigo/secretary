@@ -2,8 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import { appendMemoryFact, forgetMemoryFact, rollbackLastRevision, tuneRule } from './memory.js';
 import { store } from './store.js';
+import { ensureRuntimeSeeded, runtimePath } from './runtimeFs.js';
 
-const pendingDir = path.join(process.cwd(), 'memory', '60_adaptation', 'pending');
+ensureRuntimeSeeded();
+const pendingDir = runtimePath('memory', '60_adaptation', 'pending');
 
 function riskLevel(intent, payload) {
   if (intent === 'forget' && payload.keyword && payload.keyword.length <= 1) return 'high';

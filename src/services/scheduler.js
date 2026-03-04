@@ -1,4 +1,5 @@
 import cron from 'node-cron';
+import { DateTime } from 'luxon';
 import { config } from '../config.js';
 import { store } from './store.js';
 import { messageForJob, shouldSkipJob } from './reminders.js';
@@ -17,14 +18,83 @@ async function fanout(text) {
   for (const userId of users) {
     await pushMessage(userId, text).catch(() => null);
   }
+  return users.length;
+}
+
+async function sendToUser(userId, text) {
+  if (!userId) return 0;
+  await pushMessage(userId, text).catch(() => null);
+  return 1;
+}
+
+function isLocalClock(targetHour) {
+  const now = DateTime.now().setZone(config.tz);
+  return now.hour === targetHour;
+}
+
+export async function runMorningJob({ enforceLocalClock = false } = {}) {
+  if (enforceLocalClock && !isLocalClock(8)) return { skipped: true, reason: 'not 08:00 local hour' };
+  const users = targetUsers();
+  let userCount = 0;
+  for (const userId of users) {
+    const text = await runMorningPlan(userId);
+    userCount += await sendToUser(userId, text);
+  }
+  return { skipped: false, userCount };
+}
+
+export async function runNightJob({ enforceLocalClock = false } = {}) {
+  if (enforceLocalClock && !isLocalClock(22)) return { skipped: true, reason: 'not 22:00 local hour' };
+  const users = targetUsers();
+  let userCount = 0;
+  for (const userId of users) {
+    const text = runNightReview(userId);
+    userCount += await sendToUser(userId, text);
+  }
+  return { skipped: false, userCount };
+}
+
+export async function runReminderTick() {
+  const due = store.dueReminderJobs();
+  let sent = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const job of due) {
+    if (shouldSkipJob(job)) {
+      store.markReminderJob(job.id, { status: 'skipped', attempts: (job.attempts || 0) + 1 });
+      skipped += 1;
+      continue;
+    }
+
+    try {
+      const users = await sendToUser(job.userId, messageForJob(job));
+      if (users > 0) {
+        store.markReminderJob(job.id, { status: 'sent', sentAt: new Date().toISOString(), attempts: (job.attempts || 0) + 1 });
+        sent += 1;
+      } else {
+        store.markReminderJob(job.id, { status: 'failed', attempts: (job.attempts || 0) + 1, error: 'no target users' });
+        failed += 1;
+      }
+    } catch (e) {
+      const attempts = (job.attempts || 0) + 1;
+      if (attempts >= 3) {
+        store.markReminderJob(job.id, { status: 'failed', attempts, error: String(e.message || e) });
+      } else {
+        store.markReminderJob(job.id, { attempts });
+      }
+      failed += 1;
+    }
+  }
+
+  return { due: due.length, sent, skipped, failed };
 }
 
 export function startSchedulers() {
   cron.schedule(
     config.cron.morning,
     async () => {
-      const text = await runMorningPlan();
-      await fanout(text);
+      await runMorningJob();
     },
     { timezone: config.tz }
   );
@@ -32,8 +102,7 @@ export function startSchedulers() {
   cron.schedule(
     config.cron.night,
     async () => {
-      const text = runNightReview();
-      await fanout(text);
+      await runNightJob();
     },
     { timezone: config.tz }
   );
@@ -41,25 +110,7 @@ export function startSchedulers() {
   cron.schedule(
     config.cron.reminderTick,
     async () => {
-      const due = store.dueReminderJobs();
-      for (const job of due) {
-        if (shouldSkipJob(job)) {
-          store.markReminderJob(job.id, { status: 'skipped', attempts: (job.attempts || 0) + 1 });
-          continue;
-        }
-
-        try {
-          await fanout(messageForJob(job));
-          store.markReminderJob(job.id, { status: 'sent', sentAt: new Date().toISOString(), attempts: (job.attempts || 0) + 1 });
-        } catch (e) {
-          const attempts = (job.attempts || 0) + 1;
-          if (attempts >= 3) {
-            store.markReminderJob(job.id, { status: 'failed', attempts, error: String(e.message || e) });
-          } else {
-            store.markReminderJob(job.id, { attempts });
-          }
-        }
-      }
+      await runReminderTick();
     },
     { timezone: config.tz }
   );

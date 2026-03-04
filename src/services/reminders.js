@@ -1,31 +1,35 @@
 import { store } from './store.js';
 import { formatYmd, addMinutes } from '../utils/time.js';
 
-export function scheduleJobsFromPlan(plan) {
+export function scheduleJobsFromPlan(userId, plan) {
   if (!plan || !plan.blocks) return 0;
   let count = 0;
-  store.resetReminderJobsForDate(`${plan.date}`);
+  store.resetReminderJobsForDate(userId, `${plan.date}`);
 
   for (const b of plan.blocks) {
     store.addReminderJob({
+      userId,
       taskId: b.taskId,
       kind: 'start',
       scheduledAt: b.startAt,
       payload: { title: b.title }
     });
     store.addReminderJob({
+      userId,
       taskId: b.taskId,
       kind: 'end_check',
       scheduledAt: b.endAt,
       payload: { title: b.title }
     });
     store.addReminderJob({
+      userId,
       taskId: b.taskId,
       kind: 'nudge1',
       scheduledAt: addMinutes(b.endAt, 10),
       payload: { title: b.title }
     });
     store.addReminderJob({
+      userId,
       taskId: b.taskId,
       kind: 'nudge2',
       scheduledAt: addMinutes(b.endAt, 30),

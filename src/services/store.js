@@ -1,14 +1,49 @@
 import fs from 'fs';
-import path from 'path';
 import { makeId } from '../utils/id.js';
 import { nowIso } from '../utils/time.js';
+import { ensureRuntimeSeeded, runtimePath } from './runtimeFs.js';
 
-const root = process.cwd();
-const statePath = path.join(root, 'data', 'state.json');
+ensureRuntimeSeeded();
+
+const statePath = runtimePath('data', 'state.json');
+
+function emptyState() {
+  return {
+    users: {},
+    tasks: [],
+    scheduleBlocks: [],
+    reminderJobs: [],
+    dailyPlans: {},
+    changeRequests: [],
+    memoryRevisions: [],
+    runtimePrefs: {},
+    conversations: {},
+    meta: { lastRevision: 0 }
+  };
+}
+
+function normalizeState(raw) {
+  const base = emptyState();
+  const src = raw && typeof raw === 'object' ? raw : {};
+  return {
+    ...base,
+    ...src,
+    users: src.users && typeof src.users === 'object' ? src.users : {},
+    tasks: Array.isArray(src.tasks) ? src.tasks : [],
+    scheduleBlocks: Array.isArray(src.scheduleBlocks) ? src.scheduleBlocks : [],
+    reminderJobs: Array.isArray(src.reminderJobs) ? src.reminderJobs : [],
+    dailyPlans: src.dailyPlans && typeof src.dailyPlans === 'object' ? src.dailyPlans : {},
+    changeRequests: Array.isArray(src.changeRequests) ? src.changeRequests : [],
+    memoryRevisions: Array.isArray(src.memoryRevisions) ? src.memoryRevisions : [],
+    runtimePrefs: src.runtimePrefs && typeof src.runtimePrefs === 'object' ? src.runtimePrefs : {},
+    conversations: src.conversations && typeof src.conversations === 'object' ? src.conversations : {},
+    meta: src.meta && typeof src.meta === 'object' ? { ...base.meta, ...src.meta } : base.meta
+  };
+}
 
 function load() {
   const raw = fs.readFileSync(statePath, 'utf8');
-  return JSON.parse(raw);
+  return normalizeState(JSON.parse(raw));
 }
 
 function save(state) {
@@ -39,8 +74,8 @@ export const store = {
     return Object.keys(load().users);
   },
 
-  listOpenTasks() {
-    return load().tasks.filter((t) => t.status !== 'done' && t.status !== 'canceled');
+  listOpenTasks(userId) {
+    return load().tasks.filter((t) => t.userId === userId && t.status !== 'done' && t.status !== 'canceled');
   },
 
   getTask(taskId) {
@@ -51,6 +86,7 @@ export const store = {
     return withState((s) => {
       const task = {
         id: makeId('task'),
+        userId: input.userId,
         title: input.title,
         status: input.status || 'todo',
         priority: input.priority ?? 3,
@@ -86,25 +122,29 @@ export const store = {
     });
   },
 
-  replacePlan(date, blocks, confirmed = false) {
+  replacePlan(userId, date, blocks, confirmed = false) {
     return withState((s) => {
-      s.dailyPlans[date] = {
+      const key = `${userId}:${date}`;
+      s.dailyPlans[key] = {
+        userId,
         date,
         blocks,
         confirmed,
         updatedAt: nowIso()
       };
-      return s.dailyPlans[date];
+      return s.dailyPlans[key];
     });
   },
 
-  getPlan(date) {
-    return load().dailyPlans[date] || null;
+  getPlan(userId, date) {
+    const key = `${userId}:${date}`;
+    return load().dailyPlans[key] || null;
   },
 
-  confirmPlan(date) {
+  confirmPlan(userId, date) {
     return withState((s) => {
-      const plan = s.dailyPlans[date];
+      const key = `${userId}:${date}`;
+      const plan = s.dailyPlans[key];
       if (!plan) return null;
       plan.confirmed = true;
       plan.confirmedAt = nowIso();
@@ -112,9 +152,9 @@ export const store = {
     });
   },
 
-  resetReminderJobsForDate(datePrefix) {
+  resetReminderJobsForDate(userId, datePrefix) {
     return withState((s) => {
-      s.reminderJobs = s.reminderJobs.filter((j) => !j.scheduledAt.startsWith(datePrefix));
+      s.reminderJobs = s.reminderJobs.filter((j) => !(j.userId === userId && j.scheduledAt.startsWith(datePrefix)));
       return s.reminderJobs.length;
     });
   },
@@ -134,7 +174,7 @@ export const store = {
   },
 
   dueReminderJobs(now = Date.now()) {
-    return load().reminderJobs.filter((j) => j.status === 'pending' && new Date(j.scheduledAt).getTime() <= now);
+    return load().reminderJobs.filter((j) => j.status === 'pending' && Number.isFinite(new Date(j.scheduledAt).getTime()) && new Date(j.scheduledAt).getTime() <= now);
   },
 
   markReminderJob(jobId, patch) {
@@ -201,5 +241,26 @@ export const store = {
       nudgePolicy: 'standard',
       planningDepth: 'normal'
     };
+  },
+
+  appendConversation(userId, role, text) {
+    return withState((s) => {
+      if (!s.conversations[userId]) s.conversations[userId] = [];
+      s.conversations[userId].push({
+        at: nowIso(),
+        role,
+        text: String(text || '')
+      });
+      if (s.conversations[userId].length > 80) {
+        s.conversations[userId] = s.conversations[userId].slice(-80);
+      }
+      return true;
+    });
+  },
+
+  getRecentConversation(userId, limit = 12) {
+    const s = load();
+    const rows = s.conversations[userId] || [];
+    return rows.slice(-limit);
   }
 };

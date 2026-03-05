@@ -4,25 +4,15 @@ dotenv.config();
 
 export const config = {
   port: Number(process.env.PORT || 8787),
-  tz: process.env.TZ || 'Asia/Tokyo',
+  tz: process.env.TZ || 'America/Vancouver',
   line: {
     channelSecret: process.env.LINE_CHANNEL_SECRET || '',
     accessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || '',
     defaultUserId: process.env.LINE_DEFAULT_USER_ID || ''
   },
-  openai: {
-    apiKey: process.env.OPENAI_API_KEY || '',
-    model: process.env.OPENAI_MODEL || 'gpt-4.1-mini'
-  },
   cron: {
-    morning: process.env.MORNING_PLAN_CRON || '30 7 * * *',
-    night: process.env.NIGHT_REVIEW_CRON || '30 21 * * *',
-    reminderTick: process.env.REMINDER_TICK_CRON || '*/1 * * * *'
-  },
-  gcal: {
-    enabled: String(process.env.GCAL_ENABLED || 'false').toLowerCase() === 'true',
-    calendarId: process.env.GCAL_CALENDAR_ID || 'primary',
-    accessToken: process.env.GCAL_ACCESS_TOKEN || ''
+    morning: process.env.MORNING_PLAN_CRON || '0 8 * * *',
+    night: process.env.NIGHT_REVIEW_CRON || '0 22 * * *'
   }
 };
 

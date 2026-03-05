@@ -2,7 +2,6 @@
   "version": 2,
   "rewrites": [
     { "source": "/webhook/line", "destination": "/api/index" },
-    { "source": "/health", "destination": "/api/index" },
-    { "source": "/internal/:path*", "destination": "/api/index" }
+    { "source": "/health", "destination": "/api/index" }
   ]
 }

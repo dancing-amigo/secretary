@@ -53,14 +53,10 @@
 - 人間が読めるMarkdownファイルとする
 - LLM処理と整合するよう、タスクデータの構造が崩れない形式で保持する
 - 最低保持項目:
-  - `id`
   - `userId`
   - `title`
   - `detail`（任意）
-  - `estimateMin`（任意）
   - `status`（初期値: `todo`）
-  - `createdAt`
-  - `updatedAt`
 
 ## 受け入れテスト（最小）
 1. 「朝です」送信後にユーザー自由形式で複数（or 単数）タスクを送る

@@ -3,7 +3,8 @@
 ## 目的
 毎朝の「朝です」への返信として送られる自由形式テキストを、
 フォーマット依存の分岐や正規表現ルールを使わずにLLMで解釈し、
-まずアクション種別を正しく判定したうえで、Google Drive上の `tasks-YYYY-MM-DD.md` に日次保存・参照できる状態を作る。
+まずアクション種別を正しく判定したうえで、Google Drive上の `tasks/YYYY-MM-DD.md` に日次保存・参照できる状態を作る。
+あわせて、各タスクに一意なローカルID（`localTaskId`）を付与し、以後の編集・削除・外部同期の土台を作る。
 
 ## 固定方針
 - 定型的なif分岐・パターンマッチ・正規表現ベースの意図判定は実装しない
@@ -19,9 +20,10 @@
 
 ## 今回の成功条件
 - ユーザーの自由形式メッセージ（改行/句読点区切り/時間ありなし/詳細ありなし）で、適切なアクションが判定される
-- 保存先はローカルJSONではなく、Google Driveフォルダ直下の `tasks-YYYY-MM-DD.md`
-- `save_tasks` 判定時のみ、別LLMでタスク分割を行って当日ファイル（`tasks-YYYY-MM-DD.md`）に保存できる
-- ユーザーが自然文で「今日のタスクは何？」「今日は何をすればいい？」等を聞いた時に、当日ファイル（`tasks-YYYY-MM-DD.md`）から現在タスク一覧を返せる
+- 保存先はローカルJSONではなく、Google Driveの `tasks/` 配下 `tasks/YYYY-MM-DD.md`
+- `save_tasks` 判定時のみ、別LLMでタスク分割を行って当日ファイル（`tasks/YYYY-MM-DD.md`）に保存できる
+- 新規保存される全タスクに `localTaskId` が付与される
+- ユーザーが自然文で「今日のタスクは何？」「今日は何をすればいい？」等を聞いた時に、当日ファイル（`tasks/YYYY-MM-DD.md`）から現在タスク一覧を返せる
 - `list_tasks` と `others` は定型レスポンスで返せる
 - 上記判定は定型ロジックではなくLLMの解釈で行う
 
@@ -44,10 +46,12 @@
 
 4. Google Drive永続化
 - `.env` で定義されるGoogle Drive設定を利用
-- 指定フォルダに日付単位のファイル `tasks-YYYY-MM-DD.md` を作成（存在しなければ作る）
+- `tasks/` フォルダを作成（存在しなければ作る）
+- `tasks/` 配下に日付単位のファイル `tasks/YYYY-MM-DD.md` を作成（存在しなければ作る）
 - 日付が変わるごとに新規ファイルを追加し、過去日付ファイルは保持する
-- `save_tasks` 時に（第2LLMで分割された結果を）当日ファイル（`tasks-YYYY-MM-DD.md`）へ更新
-- `list_tasks` 時に当日ファイル（`tasks-YYYY-MM-DD.md`）を読み込み
+- `save_tasks` 時に（第2LLMで分割された結果を）当日ファイル（`tasks/YYYY-MM-DD.md`）へ更新
+- 保存時に各タスクへ `localTaskId` を採番して付与する
+- `list_tasks` 時に当日ファイル（`tasks/YYYY-MM-DD.md`）を読み込み
 - `others` 時は読み書きしない
 
 5. 応答生成（Step 1では定型）
@@ -55,11 +59,12 @@
 - `list_tasks`: 一覧を返す定型文
 - `others`: 「OK」と返す（副作用なし）
 
-## 日次タスクファイル方針（`tasks-YYYY-MM-DD.md`）
+## 日次タスクファイル方針（`tasks/YYYY-MM-DD.md`）
 - 人間が読めるMarkdownファイルとする
 - LLM処理と整合するよう、タスクデータの構造が崩れない形式で保持する
 - タスクは日付ごとにファイルを分離し、当日の運用対象は当日ファイル1つに限定する
 - 最低保持項目:
+  - `id`（`localTaskId`）
   - `userId`
   - `title`
   - `detail`（任意）
@@ -67,9 +72,10 @@
 
 ## 受け入れテスト（最小）
 1. 「朝です」送信後にユーザー自由形式で複数（or 単数）タスクを送る
-2. アクション判定が `save_tasks` になり、第2LLMでタスク分割されたうえでGoogle Driveの指定フォルダ内の当日ファイル `tasks-YYYY-MM-DD.md` に保存される
-3. 「今日のタスクは何？」でアクション判定が `list_tasks` になり、当日ファイル `tasks-YYYY-MM-DD.md` ベースの一覧が返る
-4. 雑談などタスク保存/一覧取得でない入力でアクション判定が `others` になり、当日ファイル `tasks-YYYY-MM-DD.md` の読み書きをせず「OK」と返る
-5. 日付変更後の初回保存時に新しい `tasks-YYYY-MM-DD.md` が作成される
-6. `save_tasks` すべき入力で `list_tasks` / `others` を実行しない（逆も同様）
-7. 定型判定ロジック（正規表現分岐）がコード上に存在しない
+2. アクション判定が `save_tasks` になり、第2LLMでタスク分割されたうえでGoogle Driveの指定フォルダ内の当日ファイル `tasks/YYYY-MM-DD.md` に保存される
+3. 保存された各タスクに `localTaskId` が付与される
+4. 「今日のタスクは何？」でアクション判定が `list_tasks` になり、当日ファイル `tasks/YYYY-MM-DD.md` ベースの一覧が返る
+5. 雑談などタスク保存/一覧取得でない入力でアクション判定が `others` になり、当日ファイル `tasks/YYYY-MM-DD.md` の読み書きをせず「OK」と返る
+6. 日付変更後の初回保存時に新しい `tasks/YYYY-MM-DD.md` が作成される
+7. `save_tasks` すべき入力で `list_tasks` / `others` を実行しない（逆も同様）
+8. 定型判定ロジック（正規表現分岐）がコード上に存在しない

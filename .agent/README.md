@@ -76,7 +76,7 @@
 ### `STEP2.md`
 - 当日タスク更新を `modify_tasks` に統合し、追加、編集、削除、完了、詳細更新を単一アクションで扱えるようにした
 - `modify_tasks` 用 LLM が当日ファイルの現状とユーザー指示から、更新後の `tasks/YYYY-MM-DD.md` 全文を直接返す構成へ切り替えた
-- `list_tasks` は Markdown から `title` / `status` / `detail` をそのまま読み出して返す形に更新した
+- `list_tasks` は Markdown から `title` / `status` を読み出して返す
 
 ## 更新ルール
 

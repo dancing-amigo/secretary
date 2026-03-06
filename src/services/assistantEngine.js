@@ -139,9 +139,6 @@ function formatTaskList(tasks) {
   for (const [index, task] of tasks.entries()) {
     const statusLabel = task.status === 'done' ? 'done' : 'todo';
     lines.push(`${index + 1}. [${statusLabel}] ${task.title}`);
-    if (task.detail) {
-      lines.push(`   - detail: ${task.detail}`);
-    }
   }
 
   return lines.join('\n');

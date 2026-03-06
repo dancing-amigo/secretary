@@ -6,10 +6,15 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_DRIVE_API_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const PENDING_STALE_MS = 2 * 60 * 60 * 1000;
+const TASKS_FOLDER_NAME = 'tasks';
+const TASKS_SECTION_START = '<!-- secretary:tasks:start -->';
+const TASKS_SECTION_END = '<!-- secretary:tasks:end -->';
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
 let cachedStateFileId = null;
+let cachedTasksFolderId = null;
+const cachedTaskFileIds = new Map();
 
 function driveStateConfigError() {
   if (!config.googleDrive.enabled) return 'GOOGLE_DRIVE_ENABLED must be true';
@@ -83,7 +88,7 @@ async function driveRequest({ method, url, params, data, headers, responseType }
   });
 }
 
-function buildMultipartBody(metadata, content) {
+function buildMultipartBody(metadata, content, contentMimeType = 'application/json; charset=UTF-8') {
   const boundary = `secretary-${randomUUID()}`;
   const body = [
     `--${boundary}`,
@@ -91,7 +96,7 @@ function buildMultipartBody(metadata, content) {
     '',
     JSON.stringify(metadata),
     `--${boundary}`,
-    'Content-Type: application/json; charset=UTF-8',
+    `Content-Type: ${contentMimeType}`,
     '',
     content,
     `--${boundary}--`
@@ -106,23 +111,10 @@ function buildMultipartBody(metadata, content) {
 async function findStateFileId() {
   if (cachedStateFileId) return cachedStateFileId;
 
-  const q = [
-    'trashed = false',
-    `name = '${escapeDriveQueryValue(config.googleDrive.stateFileName)}'`,
-    `'${escapeDriveQueryValue(config.googleDrive.folderId)}' in parents`
-  ].join(' and ');
-
-  const response = await driveRequest({
-    method: 'get',
-    url: GOOGLE_DRIVE_API_URL,
-    params: {
-      q,
-      pageSize: 1,
-      fields: 'files(id,name)'
-    }
+  const existingId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: config.googleDrive.stateFileName
   });
-
-  const existingId = response.data?.files?.[0]?.id;
   if (existingId) {
     cachedStateFileId = existingId;
     return existingId;
@@ -152,13 +144,159 @@ async function findStateFileId() {
   return cachedStateFileId;
 }
 
-async function readState() {
-  const configError = driveStateConfigError();
-  if (configError) {
-    throw new Error(configError);
+async function findDriveChildId({ parentId, name, mimeType }) {
+  const qParts = [
+    'trashed = false',
+    `name = '${escapeDriveQueryValue(name)}'`,
+    `'${escapeDriveQueryValue(parentId)}' in parents`
+  ];
+
+  if (mimeType) {
+    qParts.push(`mimeType = '${escapeDriveQueryValue(mimeType)}'`);
   }
 
-  const fileId = await findStateFileId();
+  const response = await driveRequest({
+    method: 'get',
+    url: GOOGLE_DRIVE_API_URL,
+    params: {
+      q: qParts.join(' and '),
+      pageSize: 1,
+      fields: 'files(id,name,mimeType)'
+    }
+  });
+
+  return response.data?.files?.[0]?.id || null;
+}
+
+async function createDriveFile({ parentId, name, mimeType, content }) {
+  if (mimeType === 'application/vnd.google-apps.folder') {
+    const created = await driveRequest({
+      method: 'post',
+      url: GOOGLE_DRIVE_API_URL,
+      params: { fields: 'id' },
+      data: {
+        name,
+        parents: [parentId],
+        mimeType
+      },
+      headers: { 'Content-Type': 'application/json; charset=UTF-8' }
+    });
+
+    return created.data?.id || null;
+  }
+
+  const { body, contentType } = buildMultipartBody(
+    {
+      name,
+      parents: [parentId],
+      mimeType
+    },
+    content,
+    `${mimeType}; charset=UTF-8`
+  );
+
+  const created = await driveRequest({
+    method: 'post',
+    url: GOOGLE_DRIVE_UPLOAD_URL,
+    params: {
+      uploadType: 'multipart',
+      fields: 'id'
+    },
+    data: body,
+    headers: { 'Content-Type': contentType }
+  });
+
+  return created.data?.id || null;
+}
+
+async function ensureTasksFolderId() {
+  if (cachedTasksFolderId) return cachedTasksFolderId;
+
+  const existingId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: TASKS_FOLDER_NAME,
+    mimeType: 'application/vnd.google-apps.folder'
+  });
+
+  if (existingId) {
+    cachedTasksFolderId = existingId;
+    return existingId;
+  }
+
+  const createdId = await createDriveFile({
+    parentId: config.googleDrive.folderId,
+    name: TASKS_FOLDER_NAME,
+    mimeType: 'application/vnd.google-apps.folder',
+    content: ''
+  });
+
+  cachedTasksFolderId = createdId;
+  return createdId;
+}
+
+function buildTaskFileBody({ dateKey, tasks }) {
+  const taskLines = tasks.length === 0
+    ? ['- まだタスクはありません']
+    : tasks.flatMap((task, index) => {
+      const lines = [
+        `${index + 1}. [${task.status}] ${task.title} (#${task.id})`,
+        `   - userId: ${task.userId}`
+      ];
+
+      if (task.detail) {
+        lines.push(`   - detail: ${task.detail}`);
+      }
+
+      return lines;
+    });
+
+  const payload = JSON.stringify({ date: dateKey, tasks }, null, 2);
+
+  return [
+    `# Tasks ${dateKey}`,
+    '',
+    '## Items',
+    ...taskLines,
+    '',
+    '## Structured Data',
+    TASKS_SECTION_START,
+    '```json',
+    payload,
+    '```',
+    TASKS_SECTION_END,
+    ''
+  ].join('\n');
+}
+
+function parseTaskFileBody(content, dateKey) {
+  const text = String(content || '').trim();
+  if (!text) {
+    return { date: dateKey, tasks: [] };
+  }
+
+  const startIndex = text.indexOf(TASKS_SECTION_START);
+  const endIndex = text.indexOf(TASKS_SECTION_END);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    return { date: dateKey, tasks: [] };
+  }
+
+  const section = text.slice(startIndex + TASKS_SECTION_START.length, endIndex);
+  const jsonStart = section.indexOf('{');
+  const jsonEnd = section.lastIndexOf('}');
+  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd < jsonStart) {
+    return { date: dateKey, tasks: [] };
+  }
+
+  try {
+    const parsed = JSON.parse(section.slice(jsonStart, jsonEnd + 1));
+    const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
+    return { date: String(parsed?.date || dateKey), tasks };
+  } catch {
+    return { date: dateKey, tasks: [] };
+  }
+}
+
+async function readDriveTextFile(fileId) {
   const response = await driveRequest({
     method: 'get',
     url: `${GOOGLE_DRIVE_API_URL}/${fileId}`,
@@ -166,7 +304,55 @@ async function readState() {
     responseType: 'arraybuffer'
   });
 
-  const text = Buffer.from(response.data || '').toString('utf8').trim();
+  return Buffer.from(response.data || '').toString('utf8');
+}
+
+async function writeDriveTextFile(fileId, content, mimeType = 'text/markdown') {
+  await driveRequest({
+    method: 'patch',
+    url: `${GOOGLE_DRIVE_UPLOAD_URL}/${fileId}`,
+    params: { uploadType: 'media' },
+    data: content,
+    headers: { 'Content-Type': `${mimeType}; charset=UTF-8` }
+  });
+}
+
+async function ensureTaskFileId(dateKey) {
+  if (cachedTaskFileIds.has(dateKey)) {
+    return cachedTaskFileIds.get(dateKey);
+  }
+
+  const tasksFolderId = await ensureTasksFolderId();
+  const fileName = `${dateKey}.md`;
+  const existingId = await findDriveChildId({
+    parentId: tasksFolderId,
+    name: fileName
+  });
+
+  if (existingId) {
+    cachedTaskFileIds.set(dateKey, existingId);
+    return existingId;
+  }
+
+  const createdId = await createDriveFile({
+    parentId: tasksFolderId,
+    name: fileName,
+    mimeType: 'text/markdown',
+    content: buildTaskFileBody({ dateKey, tasks: [] })
+  });
+
+  cachedTaskFileIds.set(dateKey, createdId);
+  return createdId;
+}
+
+async function readState() {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findStateFileId();
+  const text = (await readDriveTextFile(fileId)).trim();
   if (!text) return { notifications: {} };
 
   try {
@@ -178,13 +364,57 @@ async function readState() {
 
 async function writeState(state) {
   const fileId = await findStateFileId();
-  await driveRequest({
-    method: 'patch',
-    url: `${GOOGLE_DRIVE_UPLOAD_URL}/${fileId}`,
-    params: { uploadType: 'media' },
-    data: JSON.stringify(normalizeState(state), null, 2),
-    headers: { 'Content-Type': 'application/json; charset=UTF-8' }
-  });
+  await writeDriveTextFile(fileId, JSON.stringify(normalizeState(state), null, 2), 'application/json');
+}
+
+function normalizeStoredTask(task, fallbackUserId = '') {
+  if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
+
+  const title = String(task.title || '').trim();
+  if (!title) return null;
+
+  const detail = String(task.detail || '').trim();
+  const status = String(task.status || 'todo').trim() || 'todo';
+
+  return {
+    id: String(task.id || `task-${randomUUID()}`),
+    userId: String(task.userId || fallbackUserId),
+    title,
+    detail,
+    status
+  };
+}
+
+export async function readTasksForDate(dateKey) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await ensureTaskFileId(dateKey);
+  const content = await readDriveTextFile(fileId);
+  const parsed = parseTaskFileBody(content, dateKey);
+
+  return parsed.tasks
+    .map((task) => normalizeStoredTask(task))
+    .filter(Boolean);
+}
+
+export async function appendTasksForDate({ dateKey, userId, tasks }) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await ensureTaskFileId(dateKey);
+  const existingTasks = await readTasksForDate(dateKey);
+  const normalizedNewTasks = tasks
+    .map((task) => normalizeStoredTask(task, userId))
+    .filter(Boolean);
+
+  const mergedTasks = [...existingTasks, ...normalizedNewTasks];
+  await writeDriveTextFile(fileId, buildTaskFileBody({ dateKey, tasks: mergedTasks }));
+  return normalizedNewTasks;
 }
 
 export async function reserveNotificationWindow({ slot, dateKey, localTime, now = new Date() }) {

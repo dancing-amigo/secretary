@@ -1,16 +1,18 @@
 # LINE Secretary (Minimal)
 
-このアプリは次の3つだけを行います。
+このアプリは次のことを行います。
 
 - バンクーバー時間の朝ウィンドウ `07:30-08:30` に `朝です` を1回だけ送信
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に `夜です` を1回だけ送信
-- LINEテキストメッセージへの返信は常に `おけ`
+- LINE自由形式メッセージをLLMで判定し、当日タスクの保存・一覧取得・その他応答を返す
+- Google Drive の `tasks/YYYY-MM-DD.md` に日次タスクを保存する
 
 ## 必須環境変数
 
 - `LINE_CHANNEL_SECRET`
 - `LINE_CHANNEL_ACCESS_TOKEN`
 - `LINE_DEFAULT_USER_ID`
+- `OPENAI_API_KEY`
 
 任意:
 
@@ -19,6 +21,10 @@
 - `MORNING_PLAN_CRON`（既定: `0 8 * * *`）
 - `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
+- `OPENAI_ACTION_MODEL`
+- `OPENAI_TASK_MODEL`
 - `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID` / `GOOGLE_DRIVE_STATE_FILE_NAME`
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
 

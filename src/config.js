@@ -37,6 +37,12 @@ export const config = {
     morning: process.env.MORNING_PLAN_CRON || '0 8 * * *',
     night: process.env.NIGHT_REVIEW_CRON || '0 22 * * *'
   },
+  openai: {
+    apiKey: process.env.OPENAI_API_KEY || '',
+    baseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+    actionModel: process.env.OPENAI_ACTION_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini',
+    taskModel: process.env.OPENAI_TASK_MODEL || process.env.OPENAI_MODEL || 'gpt-5-mini'
+  },
   googleDrive: {
     enabled: String(process.env.GOOGLE_DRIVE_ENABLED || 'false').toLowerCase() === 'true',
     folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',

@@ -149,8 +149,7 @@ function formatTaskList(tasks) {
   const lines = ['今日のタスクです。'];
   for (const [index, task] of tasks.entries()) {
     const statusLabel = task.status === 'done' ? 'done' : 'todo';
-    const detailSuffix = task.detail ? ` / ${task.detail}` : '';
-    lines.push(`${index + 1}. [${statusLabel}] ${task.title}${detailSuffix}`);
+    lines.push(`${index + 1}. [${statusLabel}] ${task.title}`);
   }
 
   return lines.join('\n');

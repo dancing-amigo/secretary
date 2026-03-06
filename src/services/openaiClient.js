@@ -11,6 +11,15 @@ function llmConfigError() {
   return '';
 }
 
+function toReadableApiError(error) {
+  const apiMessage = error?.response?.data?.error?.message;
+  if (apiMessage) {
+    return new Error(String(apiMessage));
+  }
+
+  return error instanceof Error ? error : new Error(String(error || 'Unknown API error'));
+}
+
 function extractStructuredContent(response) {
   const choice = response.data?.choices?.[0]?.message;
   if (choice?.refusal) {
@@ -31,27 +40,30 @@ export async function createStructuredOutput({ model, schemaName, schema, system
     throw new Error(configError);
   }
 
-  const response = await chatApi.post('/chat/completions', {
-    model,
-    temperature: 0,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt }
-    ],
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: schemaName,
-        strict: true,
-        schema
+  try {
+    const response = await chatApi.post('/chat/completions', {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: schemaName,
+          strict: true,
+          schema
+        }
       }
-    }
-  }, {
-    headers: {
-      Authorization: `Bearer ${config.openai.apiKey}`,
-      'Content-Type': 'application/json'
-    }
-  });
+    }, {
+      headers: {
+        Authorization: `Bearer ${config.openai.apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
 
-  return JSON.parse(extractStructuredContent(response));
+    return JSON.parse(extractStructuredContent(response));
+  } catch (error) {
+    throw toReadableApiError(error);
+  }
 }

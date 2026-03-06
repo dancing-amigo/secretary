@@ -34,6 +34,32 @@ function extractStructuredContent(response) {
   return content;
 }
 
+export async function createTextOutput({ model, systemPrompt, userPrompt }) {
+  const configError = llmConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  try {
+    const response = await chatApi.post('/chat/completions', {
+      model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ]
+    }, {
+      headers: {
+        Authorization: `Bearer ${config.openai.apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    return extractStructuredContent(response);
+  } catch (error) {
+    throw toReadableApiError(error);
+  }
+}
+
 export async function createStructuredOutput({ model, schemaName, schema, systemPrompt, userPrompt }) {
   const configError = llmConfigError();
   if (configError) {

@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP2.md`
-- 当日タスク更新を `modify_tasks` に統合する計画
-- 追加、編集、削除、完了、詳細更新を単一アクションで扱う
-- `localTaskId` を軸に対象タスクを安定同定し、一覧は保存済み内容をそのまま返す方針
-
 ### `STEP3.md`
 - 毎晩 22:00 に当日サマリーを送信し、Google Drive 直下の `log.md` に恒久蓄積する計画
 - 会話履歴、当日タスク、ユーザー行動文脈を要約対象にする
@@ -77,6 +72,11 @@
 - 自由文入力を LLM で解釈し、`save_tasks` / `list_tasks` / `others` を判定する基盤
 - `save_tasks` 時のみ別 LLM でタスク分割し、Google Drive の `tasks/YYYY-MM-DD.md` に保存する方針
 - 各タスクへ `localTaskId` を付与し、後続の編集や外部同期の土台を作る
+
+### `STEP2.md`
+- 当日タスク更新を `modify_tasks` に統合し、追加、編集、削除、完了、詳細更新を単一アクションで扱えるようにした
+- `modify_tasks` 用 LLM が当日ファイルの現状とユーザー指示から、更新後の `tasks/YYYY-MM-DD.md` 全文を直接返す構成へ切り替えた
+- `list_tasks` は Markdown から `title` / `status` / `detail` をそのまま読み出して返す形に更新した
 
 ## 更新ルール
 

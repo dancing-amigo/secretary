@@ -1,6 +1,7 @@
+import { randomUUID } from 'crypto';
 import { config } from '../config.js';
-import { appendTasksForDate, readTasksForDate } from './googleDriveState.js';
-import { createStructuredOutput } from './openaiClient.js';
+import { readTaskFileForDate, readTasksForDate, replaceTaskFileForDate } from './googleDriveState.js';
+import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -9,33 +10,9 @@ const ACTION_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['save_tasks', 'list_tasks', 'others']
+      enum: ['modify_tasks', 'list_tasks', 'others']
     },
     reason: { type: 'string' }
-  }
-};
-
-const TASK_SPLIT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['tasks'],
-  properties: {
-    tasks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['title', 'detail', 'status'],
-        properties: {
-          title: { type: 'string' },
-          detail: { type: 'string' },
-          status: {
-            type: 'string',
-            enum: ['todo']
-          }
-        }
-      }
-    }
   }
 };
 
@@ -62,21 +39,6 @@ function getLocalDateContext(date = new Date()) {
   };
 }
 
-function normalizeTaskDraft(task) {
-  if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
-
-  const title = String(task.title || '').trim().replace(/\s+/g, ' ');
-  if (!title) return null;
-
-  const detail = String(task.detail || '').trim().replace(/\s+/g, ' ');
-
-  return {
-    title: title.slice(0, 120),
-    detail: detail.slice(0, 280),
-    status: 'todo'
-  };
-}
-
 function buildActionPrompt({ text, dateKey, localTime, timeZone }) {
   return [
     'あなたは個人向けLINE秘書のアクション分類器です。',
@@ -85,12 +47,12 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone }) {
     `タイムゾーン: ${timeZone}`,
     '',
     '次の3つから必ず1つだけ選んでください。',
-    '- save_tasks: ユーザーが今日のタスク、やること、予定を保存したい意図の発話。',
+    '- modify_tasks: ユーザーが今日のタスクを追加・編集・削除・完了報告・補足更新したい意図の発話。',
     '- list_tasks: ユーザーが今日のタスク一覧を知りたい、確認したい意図の発話。',
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
     '',
     '自然な日本語として広く解釈してください。',
-    'この段階ではタスク分割はしません。',
+    'この段階では変更計画の作成はしません。',
     'JSONオブジェクトのみを返してください。',
     '',
     'ユーザーメッセージ:',
@@ -98,23 +60,48 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone }) {
   ].join('\n');
 }
 
-function buildTaskSplitPrompt({ text, dateKey, localTime, timeZone }) {
+function buildNewTaskIdCandidates(count = 5) {
+  return Array.from({ length: count }, () => `task-${randomUUID()}`);
+}
+
+function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileContent, newTaskIds, userId }) {
   return [
-    'あなたはユーザーメッセージから、今日保存すべきタスクを抽出する役割です。',
+    'あなたは今日のタスクファイル全文を更新する役割です。',
     `現在のローカル日付: ${dateKey}`,
     `現在のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
     '',
-    'ルール:',
-    '- 複数のタスクが含まれていれば、保存単位ごとに分割してください。',
-    '- title は短く、行動が分かる表現にしてください。',
-    '- 時間、条件、補足、制約は detail に入れてください。',
-    '- あいさつや雑談の部分は無視してください。',
-    '- 今日のtodoとして保存できる内容だけを抽出してください。',
-    '- 保存対象が実質ない場合は空配列を返してください。',
-    '- status は必ず "todo" にしてください。',
+    'あなたの出力は、そのまま tasks/YYYY-MM-DD.md に書き込まれます。',
+    '説明文やコードフェンスは付けず、最終的な Markdown 本文だけを返してください。',
+    '曖昧で安全に更新できない場合のみ、Markdown の代わりに 1 行で "CLARIFY: ..." を返してください。',
     '',
-    'JSONオブジェクトのみを返してください。',
+    '出力フォーマット:',
+    `# Tasks ${dateKey}`,
+    '',
+    '## Items',
+    '- [todo|done] タスクタイトル',
+    '  - id: task-...',
+    '  - userId: USER_ID',
+    '  - detail: 補足情報',
+    '',
+    'ルール:',
+    '- 変更がないタスクも含めて、当日ファイルの最終状態を全文で返してください。',
+    '- 既存タスクを残す場合は、その id と userId を必ずそのまま維持してください。',
+    '- 新規タスクを追加する場合は、下の新規 id 候補だけを使ってください。',
+    '- 新規タスクの userId は必ず現在のユーザーIDを使ってください。',
+    '- title は短く、行動が分かる表現にしてください。',
+    '- detail には時間、条件、補足、制約のみを簡潔に要約してください。不要なら detail 行を省略して構いません。',
+    '- 完了報告は status を done にしてください。',
+    '- 削除指示があれば、そのタスクは最終ファイルから除外してください。',
+    '- タスクが 0 件なら、Items セクションには "- まだタスクはありません" の 1 行だけを書いてください。',
+    '- タスクの並び順は自然でよいですが、残すタスクの内容を勝手に落とさないでください。',
+    '',
+    `現在のユーザーID: ${userId || '(empty)'}`,
+    '新規タスク用の id 候補:',
+    ...newTaskIds.map((id) => `- ${id}`),
+    '',
+    '現在のファイル内容:',
+    fileContent,
     '',
     'ユーザーメッセージ:',
     text
@@ -131,13 +118,11 @@ async function classifyAction({ text, dateContext }) {
   });
 }
 
-async function extractTasks({ text, dateContext }) {
-  return createStructuredOutput({
+async function rewriteTaskFile({ text, dateContext, fileContent, newTaskIds, userId }) {
+  return createTextOutput({
     model: config.openai.taskModel,
-    schemaName: 'save_tasks_payload',
-    schema: TASK_SPLIT_SCHEMA,
-    systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildTaskSplitPrompt({ text, ...dateContext })
+    systemPrompt: '指定された形式の Markdown 本文だけ、または "CLARIFY: ..." の 1 行だけを返してください。',
+    userPrompt: buildTaskRewritePrompt({ text, ...dateContext, fileContent, newTaskIds, userId })
   });
 }
 
@@ -150,6 +135,9 @@ function formatTaskList(tasks) {
   for (const [index, task] of tasks.entries()) {
     const statusLabel = task.status === 'done' ? 'done' : 'todo';
     lines.push(`${index + 1}. [${statusLabel}] ${task.title}`);
+    if (task.detail) {
+      lines.push(`   - detail: ${task.detail}`);
+    }
   }
 
   return lines.join('\n');
@@ -164,23 +152,29 @@ export async function processUserMessage({ userId, text }) {
   const dateContext = getLocalDateContext();
   const actionPlan = await classifyAction({ text: rawText, dateContext });
 
-  if (actionPlan.action === 'save_tasks') {
-    const extracted = await extractTasks({ text: rawText, dateContext });
-    const tasks = (Array.isArray(extracted.tasks) ? extracted.tasks : [])
-      .map((task) => normalizeTaskDraft(task))
-      .filter(Boolean);
+  if (actionPlan.action === 'modify_tasks') {
+    const currentFileContent = await readTaskFileForDate(dateContext.dateKey);
+    const newTaskIds = buildNewTaskIdCandidates();
+    const rewrittenContent = (await rewriteTaskFile({
+      text: rawText,
+      dateContext,
+      userId,
+      fileContent: currentFileContent,
+      newTaskIds
+    })).trim();
 
-    if (tasks.length === 0) {
-      throw new Error('タスクを解釈できませんでした。もう一度具体的に送ってください。');
+    if (rewrittenContent.startsWith('CLARIFY:')) {
+      return rewrittenContent.slice('CLARIFY:'.length).trim() || 'どのタスクを更新するか確認させてください。';
     }
 
-    const savedTasks = await appendTasksForDate({
+    await replaceTaskFileForDate({
       dateKey: dateContext.dateKey,
-      userId,
-      tasks
+      content: rewrittenContent,
+      allowedNewTaskIds: newTaskIds,
+      currentUserId: userId
     });
 
-    return `タスクを保存しました（${savedTasks.length}件）`;
+    return '今日のタスクを更新しました。';
   }
 
   if (actionPlan.action === 'list_tasks') {

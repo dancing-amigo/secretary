@@ -7,8 +7,6 @@ const GOOGLE_DRIVE_API_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const PENDING_STALE_MS = 2 * 60 * 60 * 1000;
 const TASKS_FOLDER_NAME = 'tasks';
-const TASKS_SECTION_START = '<!-- secretary:tasks:start -->';
-const TASKS_SECTION_END = '<!-- secretary:tasks:end -->';
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
@@ -239,61 +237,93 @@ function buildTaskFileBody({ dateKey, tasks }) {
     ? ['- まだタスクはありません']
     : tasks.flatMap((task, index) => {
       const lines = [
-        `${index + 1}. [${task.status}] ${task.title} (#${task.id})`,
-        `   - userId: ${task.userId}`
+        `- [${task.status}] ${task.title}`,
+        `  - id: ${task.id}`,
+        `  - userId: ${task.userId}`
       ];
 
       if (task.detail) {
-        lines.push(`   - detail: ${task.detail}`);
+        lines.push(`  - detail: ${task.detail}`);
+      }
+
+      if (index < tasks.length - 1) {
+        lines.push('');
       }
 
       return lines;
     });
-
-  const payload = JSON.stringify({ date: dateKey, tasks }, null, 2);
 
   return [
     `# Tasks ${dateKey}`,
     '',
     '## Items',
     ...taskLines,
-    '',
-    '## Structured Data',
-    TASKS_SECTION_START,
-    '```json',
-    payload,
-    '```',
-    TASKS_SECTION_END,
     ''
   ].join('\n');
 }
 
+function parseMarkdownTasks(text, dateKey) {
+  const normalizedText = String(text || '').replace(/\r\n/g, '\n').trim();
+  if (!normalizedText) {
+    return { date: dateKey, tasks: [] };
+  }
+
+  const lines = normalizedText.split('\n');
+  const headerMatch = lines[0]?.match(/^# Tasks (\d{4}-\d{2}-\d{2})$/);
+  const parsedDateKey = headerMatch?.[1] || dateKey;
+  const tasks = [];
+  let currentTask = null;
+
+  const pushCurrentTask = () => {
+    if (!currentTask) return;
+    tasks.push(currentTask);
+    currentTask = null;
+  };
+
+  for (const rawLine of lines.slice(1)) {
+    const line = rawLine.trimEnd();
+    if (!line.trim()) {
+      continue;
+    }
+
+    if (line === '## Items' || line === '- まだタスクはありません') {
+      continue;
+    }
+
+    const taskMatch = line.match(/^(?:-|\d+\.) \[(todo|done)\] (.+)$/);
+    if (taskMatch) {
+      pushCurrentTask();
+      currentTask = {
+        status: taskMatch[1],
+        title: taskMatch[2].trim(),
+        detail: ''
+      };
+      continue;
+    }
+
+    if (!currentTask) {
+      continue;
+    }
+
+    const metaMatch = line.match(/^\s*- (id|userId|detail):\s*(.*)$/);
+    if (!metaMatch) {
+      continue;
+    }
+
+    const [, key, value] = metaMatch;
+    currentTask[key] = value.trim();
+  }
+
+  pushCurrentTask();
+
+  return {
+    date: parsedDateKey,
+    tasks
+  };
+}
+
 function parseTaskFileBody(content, dateKey) {
-  const text = String(content || '').trim();
-  if (!text) {
-    return { date: dateKey, tasks: [] };
-  }
-
-  const startIndex = text.indexOf(TASKS_SECTION_START);
-  const endIndex = text.indexOf(TASKS_SECTION_END);
-  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
-    return { date: dateKey, tasks: [] };
-  }
-
-  const section = text.slice(startIndex + TASKS_SECTION_START.length, endIndex);
-  const jsonStart = section.indexOf('{');
-  const jsonEnd = section.lastIndexOf('}');
-  if (jsonStart === -1 || jsonEnd === -1 || jsonEnd < jsonStart) {
-    return { date: dateKey, tasks: [] };
-  }
-
-  try {
-    const parsed = JSON.parse(section.slice(jsonStart, jsonEnd + 1));
-    const tasks = Array.isArray(parsed?.tasks) ? parsed.tasks : [];
-    return { date: String(parsed?.date || dateKey), tasks };
-  } catch {
-    return { date: dateKey, tasks: [] };
-  }
+  return parseMarkdownTasks(String(content || ''), dateKey);
 }
 
 async function readDriveTextFile(fileId) {
@@ -345,6 +375,16 @@ async function ensureTaskFileId(dateKey) {
   return createdId;
 }
 
+async function loadTaskFileForDate(dateKey) {
+  const fileId = await ensureTaskFileId(dateKey);
+  const content = await readDriveTextFile(fileId);
+
+  return {
+    fileId,
+    content: content || buildTaskFileBody({ dateKey, tasks: [] })
+  };
+}
+
 async function readState() {
   const configError = driveStateConfigError();
   if (configError) {
@@ -370,18 +410,32 @@ async function writeState(state) {
 function normalizeStoredTask(task, fallbackUserId = '') {
   if (!task || typeof task !== 'object' || Array.isArray(task)) return null;
 
-  const title = String(task.title || '').trim();
+  const title = String(task.title || '').trim().replace(/\s+/g, ' ');
   if (!title) return null;
 
-  const detail = String(task.detail || '').trim();
-  const status = String(task.status || 'todo').trim() || 'todo';
+  const detail = String(task.detail || '').trim().replace(/\s+/g, ' ');
+  const rawStatus = String(task.status || 'todo').trim().toLowerCase();
+  const status = rawStatus === 'done' ? 'done' : 'todo';
 
   return {
     id: String(task.id || `task-${randomUUID()}`),
     userId: String(task.userId || fallbackUserId),
-    title,
-    detail,
+    title: title.slice(0, 120),
+    detail: detail.slice(0, 280),
     status
+  };
+}
+
+async function loadTasksForDate(dateKey) {
+  const { fileId, content } = await loadTaskFileForDate(dateKey);
+  const parsed = parseTaskFileBody(content, dateKey);
+
+  return {
+    fileId,
+    content,
+    tasks: parsed.tasks
+      .map((task) => normalizeStoredTask(task))
+      .filter(Boolean)
   };
 }
 
@@ -391,30 +445,69 @@ export async function readTasksForDate(dateKey) {
     throw new Error(configError);
   }
 
-  const fileId = await ensureTaskFileId(dateKey);
-  const content = await readDriveTextFile(fileId);
-  const parsed = parseTaskFileBody(content, dateKey);
-
-  return parsed.tasks
-    .map((task) => normalizeStoredTask(task))
-    .filter(Boolean);
+  const { tasks } = await loadTasksForDate(dateKey);
+  return tasks;
 }
 
-export async function appendTasksForDate({ dateKey, userId, tasks }) {
+export async function readTaskFileForDate(dateKey) {
   const configError = driveStateConfigError();
   if (configError) {
     throw new Error(configError);
   }
 
-  const fileId = await ensureTaskFileId(dateKey);
-  const existingTasks = await readTasksForDate(dateKey);
-  const normalizedNewTasks = tasks
-    .map((task) => normalizeStoredTask(task, userId))
-    .filter(Boolean);
+  const { tasks } = await loadTasksForDate(dateKey);
+  return buildTaskFileBody({ dateKey, tasks });
+}
 
-  const mergedTasks = [...existingTasks, ...normalizedNewTasks];
-  await writeDriveTextFile(fileId, buildTaskFileBody({ dateKey, tasks: mergedTasks }));
-  return normalizedNewTasks;
+export async function replaceTaskFileForDate({ dateKey, content, allowedNewTaskIds = [], currentUserId = '' }) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedContent = String(content || '').replace(/\r\n/g, '\n').trim();
+  if (!normalizedContent) {
+    throw new Error('タスクファイルの内容が空です。');
+  }
+
+  const { fileId, tasks: existingTasks } = await loadTasksForDate(dateKey);
+  const parsed = parseTaskFileBody(normalizedContent, dateKey);
+  const nextTasks = parsed.tasks
+    .map((task) => normalizeStoredTask(task, currentUserId))
+    .filter(Boolean);
+  const seenIds = new Set();
+  const allowedNewIds = new Set(allowedNewTaskIds);
+  const existingById = new Map(existingTasks.map((task) => [task.id, task]));
+
+  if (parsed.date !== dateKey) {
+    throw new Error('返却されたタスクファイルの日付が当日ではありません。');
+  }
+
+  for (const task of nextTasks) {
+    if (seenIds.has(task.id)) {
+      throw new Error('返却されたタスクファイルに重複した id があります。');
+    }
+    seenIds.add(task.id);
+
+    const existingTask = existingById.get(task.id);
+    if (existingTask) {
+      if (existingTask.userId !== task.userId) {
+        throw new Error('既存タスクの userId は変更できません。');
+      }
+      continue;
+    }
+
+    if (!allowedNewIds.has(task.id)) {
+      throw new Error('新規タスクの id が許可された候補に含まれていません。');
+    }
+
+    if (currentUserId && task.userId !== currentUserId) {
+      throw new Error('新規タスクの userId が現在ユーザーと一致しません。');
+    }
+  }
+
+  await writeDriveTextFile(fileId, `${normalizedContent}\n`);
+  return nextTasks;
 }
 
 export async function reserveNotificationWindow({ slot, dateKey, localTime, now = new Date() }) {

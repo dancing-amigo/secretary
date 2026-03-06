@@ -39,7 +39,7 @@ function getLocalDateContext(date = new Date()) {
   };
 }
 
-function buildActionPrompt({ text, dateKey, localTime, timeZone }) {
+function buildActionPrompt({ text, dateKey, localTime, timeZone, taskContext }) {
   return [
     'あなたは個人向けLINE秘書のアクション分類器です。',
     `現在のローカル日付: ${dateKey}`,
@@ -52,8 +52,12 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone }) {
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
     '',
     '自然な日本語として広く解釈してください。',
+    '可能なら、今日のタスク状況を踏まえて解釈してください。',
     'この段階では変更計画の作成はしません。',
     'JSONオブジェクトのみを返してください。',
+    '',
+    '今日のタスク情報:',
+    taskContext,
     '',
     'ユーザーメッセージ:',
     text
@@ -108,13 +112,13 @@ function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileConten
   ].join('\n');
 }
 
-async function classifyAction({ text, dateContext }) {
+async function classifyAction({ text, dateContext, taskContext }) {
   return createStructuredOutput({
     model: config.openai.actionModel,
     schemaName: 'action_plan',
     schema: ACTION_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildActionPrompt({ text, ...dateContext })
+    userPrompt: buildActionPrompt({ text, ...dateContext, taskContext })
   });
 }
 
@@ -150,7 +154,12 @@ export async function processUserMessage({ userId, text }) {
   }
 
   const dateContext = getLocalDateContext();
-  const actionPlan = await classifyAction({ text: rawText, dateContext });
+  let taskContext = '今日のタスク情報は取得できませんでした。タスク文脈なしで判断してください。';
+  try {
+    taskContext = await readTaskFileForDate(dateContext.dateKey);
+  } catch {}
+
+  const actionPlan = await classifyAction({ text: rawText, dateContext, taskContext });
 
   if (actionPlan.action === 'modify_tasks') {
     const currentFileContent = await readTaskFileForDate(dateContext.dateKey);

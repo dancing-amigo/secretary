@@ -3,7 +3,7 @@
 このアプリは次のことを行います。
 
 - バンクーバー時間の朝ウィンドウ `07:30-08:30` に `朝です` を1回だけ送信
-- バンクーバー時間の夜ウィンドウ `21:30-22:30` に `夜です` を1回だけ送信
+- バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
 - LINE自由形式メッセージをLLMで判定し、当日タスクの更新・一覧取得・その他応答を返す
 - Google Drive の `tasks/YYYY-MM-DD.md` に日次タスクを保存する
 
@@ -21,7 +21,7 @@
 - `TZ`（既定: `America/Vancouver`）
 - `PORT`（既定: `8787`）
 - `MORNING_PLAN_CRON`（既定: `0 8 * * *`）
-- `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`）
+- `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`。実際の送信はアプリ側の夜ウィンドウ `21:30-22:30` 判定で1回に制御）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
@@ -44,5 +44,5 @@ GitHub Actions から使う場合は `.github/workflows/secretary-cron.yml` が 
 
 - `POST /webhook/line` LINE webhook
 - `POST /api/jobs/morning` 朝通知ジョブ（ローカル時刻 `07:30-08:30` の window 内で1回のみ送信）
-- `POST /api/jobs/night` 夜通知ジョブ（ローカル時刻 `21:30-22:30` の window 内で1回のみ送信）
+- `POST /api/jobs/night` 夜サマリージョブ（ローカル時刻 `21:30-22:30` の window 内で1回のみ送信）
 - `GET /health` ヘルスチェック

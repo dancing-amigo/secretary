@@ -36,6 +36,15 @@ export const config = {
   cron: {
     morning: process.env.MORNING_PLAN_CRON || '0 8 * * *',
     night: process.env.NIGHT_REVIEW_CRON || '0 22 * * *'
+  },
+  googleDrive: {
+    enabled: String(process.env.GOOGLE_DRIVE_ENABLED || 'false').toLowerCase() === 'true',
+    folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || '',
+    stateFileName: process.env.GOOGLE_DRIVE_STATE_FILE_NAME || 'secretary-state.json',
+    oauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || '',
+    oauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || '',
+    oauthRefreshToken: process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '',
+    oauthRedirectUri: process.env.GOOGLE_OAUTH_REDIRECT_URI || 'http://127.0.0.1:53682/oauth2callback'
   }
 };
 

@@ -2,8 +2,8 @@
 
 このアプリは次の3つだけを行います。
 
-- バンクーバー時間 08:00 に `朝です` を送信
-- バンクーバー時間 22:00 に `夜です` を送信
+- バンクーバー時間の朝ウィンドウ `07:30-08:30` に `朝です` を1回だけ送信
+- バンクーバー時間の夜ウィンドウ `21:30-22:30` に `夜です` を1回だけ送信
 - LINEテキストメッセージへの返信は常に `おけ`
 
 ## 必須環境変数
@@ -19,6 +19,8 @@
 - `MORNING_PLAN_CRON`（既定: `0 8 * * *`）
 - `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
+- `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID` / `GOOGLE_DRIVE_STATE_FILE_NAME`
+- `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
 
 ## 起動
 
@@ -27,9 +29,12 @@ npm install
 npm run dev
 ```
 
+GitHub Actions から使う場合は `.github/workflows/secretary-cron.yml` が 15 分ごとに `/api/jobs/*` を叩き、
+アプリ側でバンクーバー時間の送信 window 判定と Google Drive 上の重複防止を行います。
+
 ## エンドポイント
 
 - `POST /webhook/line` LINE webhook
-- `POST /api/jobs/morning` 朝通知ジョブ（ローカル時刻08時のみ送信）
-- `POST /api/jobs/night` 夜通知ジョブ（ローカル時刻22時のみ送信）
+- `POST /api/jobs/morning` 朝通知ジョブ（ローカル時刻 `07:30-08:30` の window 内で1回のみ送信）
+- `POST /api/jobs/night` 夜通知ジョブ（ローカル時刻 `21:30-22:30` の window 内で1回のみ送信）
 - `GET /health` ヘルスチェック

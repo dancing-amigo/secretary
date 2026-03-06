@@ -2,15 +2,56 @@ import cron from 'node-cron';
 import { config } from '../config.js';
 import { pushMessage } from './lineClient.js';
 import { runMorningPlan, runNightReview } from './assistantEngine.js';
+import {
+  completeNotificationWindow,
+  failNotificationWindow,
+  reserveNotificationWindow
+} from './googleDriveState.js';
 
-function localHour(timeZone) {
-  const parts = new Intl.DateTimeFormat('en-US', {
+const NOTIFICATION_WINDOWS = {
+  morning: {
+    startMinutes: 7 * 60 + 30,
+    endMinutes: 8 * 60 + 30,
+    label: '07:30-08:30 local time'
+  },
+  night: {
+    startMinutes: 21 * 60 + 30,
+    endMinutes: 22 * 60 + 30,
+    label: '21:30-22:30 local time'
+  }
+};
+
+function getLocalDateTimeParts(timeZone, date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: 'numeric',
+    minute: '2-digit',
     hour12: false
-  }).formatToParts(new Date());
-  const hourPart = parts.find((p) => p.type === 'hour')?.value;
-  return Number(hourPart);
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  return {
+    year: get('year'),
+    month: get('month'),
+    day: get('day'),
+    hour: Number(get('hour')),
+    minute: Number(get('minute'))
+  };
+}
+
+function getLocalScheduleSnapshot(slot, timeZone, date = new Date()) {
+  const window = NOTIFICATION_WINDOWS[slot];
+  const parts = getLocalDateTimeParts(timeZone, date);
+  const totalMinutes = parts.hour * 60 + parts.minute;
+  return {
+    dateKey: `${parts.year}-${parts.month}-${parts.day}`,
+    localTime: `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
+    withinWindow: totalMinutes >= window.startMinutes && totalMinutes <= window.endMinutes,
+    windowLabel: window.label
+  };
 }
 
 async function sendToDefaultUser(text) {
@@ -23,24 +64,70 @@ async function sendToDefaultUser(text) {
   return { ok: true, userId, text };
 }
 
-export async function runMorningJob({ enforceLocalClock = false } = {}) {
-  if (enforceLocalClock) {
-    if (localHour(config.tz) !== 8) return { skipped: true, reason: 'not 08:00 local hour' };
+async function runWindowedJob({ slot, textFactory, enforceWindow = false }) {
+  const snapshot = getLocalScheduleSnapshot(slot, config.tz);
+  if (enforceWindow && !snapshot.withinWindow) {
+    return { skipped: true, reason: `outside ${snapshot.windowLabel}`, ...snapshot };
   }
 
-  const text = await runMorningPlan();
-  const out = await sendToDefaultUser(text);
-  return { skipped: false, ...out };
+  let reservation;
+  try {
+    reservation = await reserveNotificationWindow({
+      slot,
+      dateKey: snapshot.dateKey,
+      localTime: snapshot.localTime
+    });
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: `notification dedupe unavailable: ${String(error.message || error)}`,
+      ...snapshot
+    };
+  }
+
+  if (!reservation.reserved) {
+    return { skipped: true, reason: reservation.reason, ...snapshot };
+  }
+
+  try {
+    const text = await textFactory();
+    const out = await sendToDefaultUser(text);
+    await completeNotificationWindow({
+      slot,
+      dateKey: snapshot.dateKey,
+      localTime: snapshot.localTime
+    });
+    return { skipped: false, ...out, ...snapshot };
+  } catch (error) {
+    try {
+      await failNotificationWindow({
+        slot,
+        dateKey: snapshot.dateKey,
+        localTime: snapshot.localTime,
+        error
+      });
+    } catch {
+      // Keep the original send error as the primary failure.
+    }
+
+    throw error;
+  }
 }
 
-export async function runNightJob({ enforceLocalClock = false } = {}) {
-  if (enforceLocalClock) {
-    if (localHour(config.tz) !== 22) return { skipped: true, reason: 'not 22:00 local hour' };
-  }
+export async function runMorningJob({ enforceWindow = false } = {}) {
+  return runWindowedJob({
+    slot: 'morning',
+    textFactory: runMorningPlan,
+    enforceWindow
+  });
+}
 
-  const text = runNightReview();
-  const out = await sendToDefaultUser(text);
-  return { skipped: false, ...out };
+export async function runNightJob({ enforceWindow = false } = {}) {
+  return runWindowedJob({
+    slot: 'night',
+    textFactory: runNightReview,
+    enforceWindow
+  });
 }
 
 export function startSchedulers() {

@@ -6,7 +6,8 @@ const required = [
   'src/config.js',
   'src/services/lineClient.js',
   'src/services/assistantEngine.js',
-  'src/services/scheduler.js'
+  'src/services/scheduler.js',
+  'src/services/googleDriveState.js'
 ];
 
 const missing = required.filter((f) => !fs.existsSync(f));

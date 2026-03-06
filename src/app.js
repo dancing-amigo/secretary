@@ -1,4 +1,5 @@
 import express from 'express';
+import { appendConversationTurn } from './services/googleDriveState.js';
 import { verifyLineSignature, replyMessage } from './services/lineClient.js';
 import { processUserMessage } from './services/assistantEngine.js';
 
@@ -26,12 +27,25 @@ app.post('/webhook/line', express.raw({ type: '*/*' }), async (req, res) => {
   const events = payload.events || [];
   for (const event of events) {
     if (event.type !== 'message' || event.message?.type !== 'text') continue;
+    const userId = event.source?.userId || '';
+    const userText = event.message.text || '';
+
     try {
-      const replyText = await processUserMessage({ userId: event.source?.userId || '', text: event.message.text || '' });
+      try {
+        await appendConversationTurn({ userId, role: 'user', text: userText });
+      } catch {}
+
+      const replyText = await processUserMessage({ userId, text: userText });
       await replyMessage(event.replyToken, replyText);
+      try {
+        await appendConversationTurn({ userId, role: 'assistant', text: replyText });
+      } catch {}
     } catch (e) {
       const errText = String(e.message || e || 'error');
       await replyMessage(event.replyToken, errText);
+      try {
+        await appendConversationTurn({ userId, role: 'assistant', text: errText });
+      } catch {}
     }
   }
 

@@ -1,6 +1,15 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config.js';
-import { readTaskFileForDate, readTasksForDate, replaceTaskFileForDate } from './googleDriveState.js';
+import {
+  getLatestSentNotificationBefore,
+  getNotificationRecord,
+  readConversationTurns,
+  readTaskFileForDate,
+  readTasksForDate,
+  replaceTaskFileForDate,
+  updateNotificationRecord,
+  upsertDailyLog
+} from './googleDriveState.js';
 import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
@@ -13,6 +22,31 @@ const ACTION_SCHEMA = {
       enum: ['modify_tasks', 'list_tasks', 'others']
     },
     reason: { type: 'string' }
+  }
+};
+
+const NIGHT_SUMMARY_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['overview', 'completed', 'carryingOver', 'contextNotes', 'insights'],
+  properties: {
+    overview: { type: 'string' },
+    completed: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    carryingOver: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    contextNotes: {
+      type: 'array',
+      items: { type: 'string' }
+    },
+    insights: {
+      type: 'array',
+      items: { type: 'string' }
+    }
   }
 };
 
@@ -61,6 +95,134 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, taskContext }) 
     '',
     'ユーザーメッセージ:',
     text
+  ].join('\n');
+}
+
+function getTimeZoneOffsetMinutes(timeZone, date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit'
+  }).formatToParts(date);
+  const rawOffset = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT';
+  const match = rawOffset.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) return 0;
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+  return sign * (hours * 60 + minutes);
+}
+
+function getUtcIsoForLocalDateTime({ dateKey, time, timeZone }) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  const [hour, minute, second] = time.split(':').map((value) => Number(value || 0));
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const offsetMinutes = getTimeZoneOffsetMinutes(timeZone, utcGuess);
+  return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000).toISOString();
+}
+
+function formatConversationTurns(turns) {
+  if (turns.length === 0) {
+    return '- 会話履歴なし';
+  }
+
+  return turns
+    .map((turn) => `- [${turn.at}] ${turn.role}: ${turn.text}`)
+    .join('\n');
+}
+
+function formatTasksForSummary(tasks) {
+  if (tasks.length === 0) {
+    return '- タスクなし';
+  }
+
+  return tasks
+    .map((task) => {
+      const detail = task.detail ? ` / ${task.detail}` : '';
+      return `- [${task.status}] ${task.title} (id: ${task.id})${detail}`;
+    })
+    .join('\n');
+}
+
+function normalizeSummaryList(items) {
+  return Array.isArray(items)
+    ? items.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+    : [];
+}
+
+function formatNightSummaryMessage(summary) {
+  const lines = ['今日のサマリーです。'];
+  if (summary.overview) {
+    lines.push(summary.overview.trim());
+  }
+
+  lines.push('', '【完了したこと】');
+  lines.push(...(summary.completed.length > 0 ? summary.completed.map((item) => `- ${item}`) : ['- 特記事項なし']));
+
+  lines.push('', '【持ち越し・未完了】');
+  lines.push(...(summary.carryingOver.length > 0 ? summary.carryingOver.map((item) => `- ${item}`) : ['- 特記事項なし']));
+
+  lines.push('', '【メモ】');
+  lines.push(...(summary.contextNotes.length > 0 ? summary.contextNotes.map((item) => `- ${item}`) : ['- 特記事項なし']));
+
+  return lines.join('\n').slice(0, 5000);
+}
+
+function formatNightSummaryLog(summary, metadata) {
+  const sections = [
+    `- 送信対象ユーザー: ${metadata.userId || '(unknown)'}`,
+    `- 会話対象期間: ${metadata.since} -> ${metadata.until}`,
+    `- 対象会話数: ${metadata.conversationCount}`,
+    `- 当日タスク数: ${metadata.taskCount}`
+  ];
+
+  return [
+    '### 今日やったこと',
+    ...(summary.completed.length > 0 ? summary.completed.map((item) => `- ${item}`) : ['- 特記事項なし']),
+    '',
+    '### できなかったこと・継続事項',
+    ...(summary.carryingOver.length > 0 ? summary.carryingOver.map((item) => `- ${item}`) : ['- 特記事項なし']),
+    '',
+    '### ユーザー情報メモ',
+    ...(summary.contextNotes.length > 0 ? summary.contextNotes.map((item) => `- ${item}`) : ['- 特記事項なし']),
+    '',
+    '### 次回提案に使える示唆',
+    ...(summary.insights.length > 0 ? summary.insights.map((item) => `- ${item}`) : ['- 特記事項なし']),
+    '',
+    '### 概要',
+    summary.overview || '特記事項なし',
+    '',
+    '### メタデータ',
+    ...sections
+  ].join('\n');
+}
+
+function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationText, taskText }) {
+  return [
+    'あなたは個人向けLINE秘書の日次サマリー生成役です。',
+    `対象日付: ${dateKey}`,
+    `送信直前のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    '',
+    '目的:',
+    '- その日の完了事項、持ち越し、進捗、制約、生活文脈を短く要約する',
+    '- 単なる羅列ではなく、次回の提案や見積もりに使える具体性を残す',
+    '',
+    '出力ルール:',
+    '- overview は 1-2 文の短い要約',
+    '- completed は完了したこと、進んだこと',
+    '- carryingOver は未完了、保留、持ち越し',
+    '- contextNotes は時間、移動、制約、優先度、依頼背景などの文脈',
+    '- insights は次回の提案に使える示唆',
+    '- 各配列要素は短い日本語の 1 文で書く',
+    '- 根拠のない推測は避ける',
+    '',
+    '会話履歴:',
+    conversationText,
+    '',
+    '当日タスク:',
+    taskText
   ].join('\n');
 }
 
@@ -128,6 +290,42 @@ async function rewriteTaskFile({ text, dateContext, fileContent, newTaskIds, use
     systemPrompt: '指定された形式の Markdown 本文だけ、または "CLARIFY: ..." の 1 行だけを返してください。',
     userPrompt: buildTaskRewritePrompt({ text, ...dateContext, fileContent, newTaskIds, userId })
   });
+}
+
+async function generateNightSummary({ dateKey, localTime, timeZone, userId, turns, tasks, since, until }) {
+  const raw = await createStructuredOutput({
+    model: config.openai.summaryModel || config.openai.taskModel,
+    schemaName: 'night_summary',
+    schema: NIGHT_SUMMARY_SCHEMA,
+    systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    userPrompt: buildNightSummaryPrompt({
+      dateKey,
+      localTime,
+      timeZone,
+      conversationText: formatConversationTurns(turns),
+      taskText: formatTasksForSummary(tasks)
+    })
+  });
+
+  const summary = {
+    overview: String(raw.overview || '').trim(),
+    completed: normalizeSummaryList(raw.completed),
+    carryingOver: normalizeSummaryList(raw.carryingOver),
+    contextNotes: normalizeSummaryList(raw.contextNotes),
+    insights: normalizeSummaryList(raw.insights)
+  };
+
+  return {
+    ...summary,
+    messageText: formatNightSummaryMessage(summary),
+    logEntryMarkdown: formatNightSummaryLog(summary, {
+      userId,
+      since,
+      until,
+      conversationCount: turns.length,
+      taskCount: tasks.length
+    })
+  };
 }
 
 function formatTaskList(tasks) {
@@ -199,6 +397,84 @@ export async function runMorningPlan() {
   return '朝です';
 }
 
-export function runNightReview() {
-  return '夜です';
+export async function prepareNightReview({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const existing = await getNotificationRecord({ slot: 'night', dateKey });
+  if (existing?.sentAt) {
+    return {
+      text: '',
+      alreadySent: true,
+      reusedSummary: false,
+      logUpdated: Boolean(existing.logUpdatedAt)
+    };
+  }
+
+  const previousSummary = await getLatestSentNotificationBefore({ slot: 'night', dateKey });
+  const since = previousSummary?.sentAt || getUtcIsoForLocalDateTime({
+    dateKey,
+    time: '00:00:00',
+    timeZone
+  });
+  const until = getUtcIsoForLocalDateTime({
+    dateKey,
+    time: localTime,
+    timeZone
+  });
+  const turns = await readConversationTurns({ userId, since, until });
+  const tasks = await readTasksForDate(dateKey);
+  const summary = await generateNightSummary({
+    dateKey,
+    localTime,
+    timeZone,
+    userId,
+    turns,
+    tasks,
+    since,
+    until
+  });
+
+  await updateNotificationRecord({
+    slot: 'night',
+    dateKey,
+    updates: {
+      summaryGeneratedAt: new Date().toISOString(),
+      summarySource: {
+        since,
+        until,
+        conversationCount: turns.length,
+        taskCount: tasks.length
+      }
+    }
+  });
+
+  if (!existing?.logUpdatedAt) {
+    await upsertDailyLog({
+      dateKey,
+      entryMarkdown: summary.logEntryMarkdown
+    });
+    await updateNotificationRecord({
+      slot: 'night',
+      dateKey,
+      updates: {
+        logUpdatedAt: new Date().toISOString()
+      }
+    });
+  }
+
+  return {
+    text: summary.messageText || '今日のサマリーを作成できませんでした。',
+    alreadySent: false,
+    reusedSummary: false,
+    logUpdated: true
+  };
+}
+
+export async function runNightReview() {
+  const dateContext = getLocalDateContext();
+  const review = await prepareNightReview({
+    userId: config.line.defaultUserId,
+    dateKey: dateContext.dateKey,
+    localTime: dateContext.localTime,
+    timeZone: dateContext.timeZone
+  });
+  return review.text;
 }

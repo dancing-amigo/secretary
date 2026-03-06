@@ -16,12 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP3.md`
-- 夜ウィンドウ `21:30-22:30` の既存送信タイミングで当日サマリーを1回送り、Google Drive 直下の `log.md` に恒久蓄積する計画
-- 前日の夜サマリー送信後から当日送信直前までの会話履歴と、当日タスク更新状況を要約対象にする
-- 処理順は `サマリー生成 -> log更新 -> LINE送信` とし、各段階の重複実行を防ぐ
-- `tasks/YYYY-MM-DD.md` と `log.md` を運用の基礎データとして揃える
-
 ### `STEP4.md`
 - `modify_tasks` の結果を Google Tasks へ順方向同期する計画
 - 追加、編集、削除、完了を Google 側にも反映し、ローカルと外部表示のズレを減らす
@@ -78,6 +72,11 @@
 - 当日タスク更新を `modify_tasks` に統合し、追加、編集、削除、完了、詳細更新を単一アクションで扱えるようにした
 - `modify_tasks` 用 LLM が当日ファイルの現状とユーザー指示から、更新後の `tasks/YYYY-MM-DD.md` 全文を直接返す構成へ切り替えた
 - `list_tasks` は Markdown から `title` / `status` を読み出して返す
+
+### `STEP3.md`
+- 夜ウィンドウ `21:30-22:30` で、会話履歴と当日タスクを元にした日次サマリーを1回だけ生成・送信する実装を追加した
+- `notifications` は単一 JSON に集約し、`summaryGeneratedAt` / `logUpdatedAt` / `sentAt` を保持する構成に整理した
+- 会話履歴は `conversations/YYYY-MM-DD.json` に日単位で蓄積し、Google Drive 直下の `log.md` は日次セクション単位で更新するようにした
 
 ## 更新ルール
 

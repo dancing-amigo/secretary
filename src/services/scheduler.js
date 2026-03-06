@@ -1,8 +1,9 @@
 import cron from 'node-cron';
 import { config } from '../config.js';
 import { pushMessage } from './lineClient.js';
-import { runMorningPlan, runNightReview } from './assistantEngine.js';
+import { prepareNightReview, runMorningPlan } from './assistantEngine.js';
 import {
+  appendConversationTurn,
   completeNotificationWindow,
   failNotificationWindow,
   reserveNotificationWindow
@@ -123,11 +124,81 @@ export async function runMorningJob({ enforceWindow = false } = {}) {
 }
 
 export async function runNightJob({ enforceWindow = false } = {}) {
-  return runWindowedJob({
-    slot: 'night',
-    textFactory: runNightReview,
-    enforceWindow
-  });
+  const snapshot = getLocalScheduleSnapshot('night', config.tz);
+  if (enforceWindow && !snapshot.withinWindow) {
+    return { skipped: true, reason: `outside ${snapshot.windowLabel}`, ...snapshot };
+  }
+
+  let reservation;
+  try {
+    reservation = await reserveNotificationWindow({
+      slot: 'night',
+      dateKey: snapshot.dateKey,
+      localTime: snapshot.localTime
+    });
+  } catch (error) {
+    return {
+      skipped: true,
+      reason: `notification dedupe unavailable: ${String(error.message || error)}`,
+      ...snapshot
+    };
+  }
+
+  if (!reservation.reserved) {
+    return { skipped: true, reason: reservation.reason, ...snapshot };
+  }
+
+  try {
+    const review = await prepareNightReview({
+      userId: config.line.defaultUserId,
+      dateKey: snapshot.dateKey,
+      localTime: snapshot.localTime,
+      timeZone: config.tz
+    });
+
+    if (!review.alreadySent) {
+      const out = await sendToDefaultUser(review.text);
+      const messageSentAt = new Date().toISOString();
+      try {
+        await appendConversationTurn({
+          userId: config.line.defaultUserId,
+          role: 'assistant',
+          text: review.text,
+          at: messageSentAt
+        });
+      } catch {}
+
+      await completeNotificationWindow({
+        slot: 'night',
+        dateKey: snapshot.dateKey,
+        localTime: snapshot.localTime,
+        sentAt: messageSentAt
+      });
+
+      return { skipped: false, ...out, ...snapshot, ...review };
+    }
+
+    await completeNotificationWindow({
+      slot: 'night',
+      dateKey: snapshot.dateKey,
+      localTime: snapshot.localTime
+    });
+
+    return { skipped: true, reason: 'already sent', ...snapshot, ...review };
+  } catch (error) {
+    try {
+      await failNotificationWindow({
+        slot: 'night',
+        dateKey: snapshot.dateKey,
+        localTime: snapshot.localTime,
+        error
+      });
+    } catch {
+      // Keep the original send error as the primary failure.
+    }
+
+    throw error;
+  }
 }
 
 export function startSchedulers() {

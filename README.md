@@ -6,6 +6,8 @@
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
 - LINE自由形式メッセージをLLMで判定し、当日タスクの更新・一覧取得・その他応答を返す
 - Google Drive の `tasks/YYYY-MM-DD.md` に日次タスクを保存する
+- Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
+- Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
 
 アクション判定は、ユーザー入力に加えて Google Drive 上の当日 `tasks/YYYY-MM-DD.md` を参照して行います。タスク更新系は `modify_tasks` に統一されています。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、`modify_tasks` 用 LLM は現在の `tasks/YYYY-MM-DD.md` 全文とユーザー指示をもとに、更新後の Markdown 全文をそのまま返します。プログラム側はその Markdown を検証して Google Drive に書き込み、`list_tasks` は保存済みの `title` / `status` のみを返します。
 
@@ -27,7 +29,9 @@
 - `OPENAI_MODEL`
 - `OPENAI_ACTION_MODEL`
 - `OPENAI_TASK_MODEL`
-- `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID` / `GOOGLE_DRIVE_STATE_FILE_NAME`
+- `OPENAI_SUMMARY_MODEL`
+- `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_DRIVE_NOTIFICATION_STATE_FILE_NAME`
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
 
 ## 起動

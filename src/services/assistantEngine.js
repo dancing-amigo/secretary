@@ -26,22 +26,9 @@ const ACTION_SCHEMA = {
 const NIGHT_SUMMARY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['overview', 'completed', 'carryingOver', 'contextNotes', 'insights'],
+  required: ['extraNotes'],
   properties: {
-    overview: { type: 'string' },
-    completed: {
-      type: 'array',
-      items: { type: 'string' }
-    },
-    carryingOver: {
-      type: 'array',
-      items: { type: 'string' }
-    },
-    contextNotes: {
-      type: 'array',
-      items: { type: 'string' }
-    },
-    insights: {
+    extraNotes: {
       type: 'array',
       items: { type: 'string' }
     }
@@ -244,50 +231,33 @@ function normalizeSummaryList(items) {
     : [];
 }
 
-function formatNightSummaryMessage(summary) {
-  const lines = ['今日のサマリーです。'];
-  if (summary.overview) {
-    lines.push(summary.overview.trim());
+function formatEventLine(event) {
+  const timeText = event.allDay
+    ? 'All day'
+    : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
+  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}`;
+}
+
+function formatNightSummaryMessage({ events, extraNotes }) {
+  const lines = ['今日のイベント一覧です。', '', '【Events】'];
+  lines.push(...(events.length > 0 ? events.map((event) => formatEventLine(event)) : ['- 予定なし']));
+
+  if (extraNotes.length > 0) {
+    lines.push('', '【補足メモ】');
+    lines.push(...extraNotes.map((item) => `- ${item}`));
   }
-
-  lines.push('', '【完了したこと】');
-  lines.push(...(summary.completed.length > 0 ? summary.completed.map((item) => `- ${item}`) : ['- 特記事項なし']));
-
-  lines.push('', '【持ち越し・未完了】');
-  lines.push(...(summary.carryingOver.length > 0 ? summary.carryingOver.map((item) => `- ${item}`) : ['- 特記事項なし']));
-
-  lines.push('', '【メモ】');
-  lines.push(...(summary.contextNotes.length > 0 ? summary.contextNotes.map((item) => `- ${item}`) : ['- 特記事項なし']));
 
   return lines.join('\n').slice(0, 5000);
 }
 
-function formatNightSummaryLog(summary, metadata) {
-  const sections = [
-    `- 送信対象ユーザー: ${metadata.userId || '(unknown)'}`,
-    `- 会話対象期間: ${metadata.since} -> ${metadata.until}`,
-    `- 対象会話数: ${metadata.conversationCount}`,
-    `- 当日予定数: ${metadata.eventCount}`
-  ];
-
+function formatNightSummaryLog({ events, extraNotes, calendarSyncError }) {
   return [
-    '### 今日やったこと',
-    ...(summary.completed.length > 0 ? summary.completed.map((item) => `- ${item}`) : ['- 特記事項なし']),
+    '### Events',
+    ...(events.length > 0 ? events.map((event) => formatEventLine(event)) : ['- 予定なし']),
     '',
-    '### できなかったこと・継続事項',
-    ...(summary.carryingOver.length > 0 ? summary.carryingOver.map((item) => `- ${item}`) : ['- 特記事項なし']),
-    '',
-    '### ユーザー情報メモ',
-    ...(summary.contextNotes.length > 0 ? summary.contextNotes.map((item) => `- ${item}`) : ['- 特記事項なし']),
-    '',
-    '### 次回提案に使える示唆',
-    ...(summary.insights.length > 0 ? summary.insights.map((item) => `- ${item}`) : ['- 特記事項なし']),
-    '',
-    '### 概要',
-    summary.overview || '特記事項なし',
-    '',
-    '### メタデータ',
-    ...sections
+    '### 補足メモ',
+    ...(calendarSyncError ? [`- カレンダー同期失敗: ${calendarSyncError}`] : []),
+    ...(extraNotes.length > 0 ? extraNotes.map((item) => `- ${item}`) : calendarSyncError ? [] : ['- 特記事項なし'])
   ].join('\n');
 }
 
@@ -299,15 +269,14 @@ function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
     `タイムゾーン: ${timeZone}`,
     '',
     '目的:',
-    '- その日の完了事項、持ち越し、進捗、制約、生活文脈を短く要約する',
-    '- 単なる羅列ではなく、次回の提案や見積もりに使える具体性を残す',
+    '- event 一覧そのものは別途固定フォーマットで保存するので、ここでは会話履歴からしか取れない補足情報だけを抽出する',
+    '- 予定の追加、削除、変更、完了が event 一覧を見れば分かる場合は繰り返さない',
     '',
     '出力ルール:',
-    '- overview は 1-2 文の短い要約',
-    '- completed は完了したこと、進んだこと',
-    '- carryingOver は未完了、保留、持ち越し',
-    '- contextNotes は時間、移動、制約、優先度、依頼背景などの文脈',
-    '- insights は次回の提案に使える示唆',
+    '- extraNotes だけを返す',
+    '- extraNotes には、会話から読み取れる重要な制約、背景、注意事項、翌日以降にも効くメモだけを書く',
+    '- event の title, time, status を書き直さない',
+    '- 該当がなければ空配列にする',
     '- 各配列要素は短い日本語の 1 文で書く',
     '- 根拠のない推測は避ける',
     '',
@@ -406,23 +375,14 @@ async function generateNightSummary({ dateKey, localTime, timeZone, userId, turn
     })
   });
 
-  const summary = {
-    overview: String(raw.overview || '').trim(),
-    completed: normalizeSummaryList(raw.completed),
-    carryingOver: normalizeSummaryList(raw.carryingOver),
-    contextNotes: normalizeSummaryList(raw.contextNotes),
-    insights: normalizeSummaryList(raw.insights)
-  };
+  const extraNotes = normalizeSummaryList(raw.extraNotes);
 
   return {
-    ...summary,
-    messageText: formatNightSummaryMessage(summary),
-    logEntryMarkdown: formatNightSummaryLog(summary, {
-      userId,
-      since,
-      until,
-      conversationCount: turns.length,
-      eventCount: events.length
+    extraNotes,
+    messageText: formatNightSummaryMessage({ events, extraNotes }),
+    logEntryMarkdown: formatNightSummaryLog({
+      events,
+      extraNotes
     })
   };
 }
@@ -649,7 +609,11 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
   if (!existing?.logUpdatedAt) {
     await upsertDailyLog({
       dateKey,
-      entryMarkdown: summary.logEntryMarkdown
+      entryMarkdown: formatNightSummaryLog({
+        events,
+        extraNotes: summary.extraNotes,
+        calendarSyncError: calendarSnapshot.failed ? String(calendarSnapshot.error || 'unknown error') : ''
+      })
     });
     await updateNotificationRecord({
       slot: 'night',

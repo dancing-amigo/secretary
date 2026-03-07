@@ -17,7 +17,7 @@ const ACTION_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['modify_tasks', 'list_tasks', 'others']
+      enum: ['modify_events', 'list_events', 'others']
     },
     reason: { type: 'string' }
   }
@@ -62,17 +62,13 @@ const AGENDA_REWRITE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'title', 'kind', 'status', 'detail', 'allDay', 'startTime', 'endTime'],
+        required: ['id', 'title', 'status', 'detail', 'allDay', 'startTime', 'endTime'],
         properties: {
           id: { type: 'string' },
           title: { type: 'string' },
-          kind: {
-            type: 'string',
-            enum: ['task', 'schedule']
-          },
           status: {
             type: 'string',
-            enum: ['todo', 'done', 'confirmed']
+            enum: ['todo', 'done']
           },
           detail: { type: 'string' },
           allDay: { type: 'boolean' },
@@ -116,8 +112,8 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, agendaContext }
     `タイムゾーン: ${timeZone}`,
     '',
     '次の3つから必ず1つだけ選んでください。',
-    '- modify_tasks: ユーザーが今日の予定やタスクを追加・編集・削除・完了報告・補足更新したい意図の発話。',
-    '- list_tasks: ユーザーが今日の予定一覧、やること一覧、行動一覧を知りたい意図の発話。',
+    '- modify_events: ユーザーが今日の予定を追加・編集・削除・完了報告・補足更新したい意図の発話。',
+    '- list_events: ユーザーが今日の予定一覧、やること一覧、行動一覧を知りたい意図の発話。',
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
     '',
     '自然な日本語として広く解釈してください。',
@@ -205,7 +201,7 @@ function formatAgendaEventsForSummary(events) {
     .map((event) => {
       const detail = event.detail ? ` / ${event.detail}` : '';
       const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
-      return `- [${event.kind}/${event.status}] ${timeText} ${event.title} (id: ${event.eventId})${detail}`;
+      return `- [${event.status}] ${timeText} ${event.title} (id: ${event.eventId})${detail}`;
     })
     .join('\n');
 }
@@ -217,10 +213,9 @@ function formatCalendarEvents(events) {
 
   return events
     .map((event) => {
-      const source = event.source === 'managed' ? 'managed' : 'external';
       const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
       const detail = event.detail ? ` / ${event.detail}` : '';
-      return `- [${event.kind}/${event.status}/${source}] ${timeText} ${event.title}${detail} / eventId: ${event.eventId}`;
+      return `- [${event.status}] ${timeText} ${event.title}${detail} / eventId: ${event.eventId}`;
     })
     .join('\n');
 }
@@ -324,7 +319,7 @@ function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
   ].join('\n');
 }
 
-function buildNewAgendaEventIdCandidates(count = 5) {
+function buildNewAgendaEventIdCandidates(count = 10) {
   return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
 }
 
@@ -347,20 +342,19 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaCo
     '- clarify のときは、確認したい内容を短い日本語で返す',
     '',
     '出力フォーマット:',
-    '{"outcome":"updated","events":[{"id":"...","title":"...","kind":"task|schedule","status":"todo|done|confirmed","detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
+    '{"outcome":"updated","events":[{"id":"...","title":"...","status":"todo|done","detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
     '',
     'ルール:',
     '- 変更がない event も含めて、当日一覧の最終状態を events 配列へすべて返してください。',
     '- 既存 event を残す場合は、その id を必ずそのまま維持してください。',
     '- 新規 event を追加する場合は、下の新規 id 候補だけを使ってください。',
     '- title は短く、何の予定か分かる表現にしてください。',
-    '- kind は task または schedule のどちらかにしてください。',
-    '- status は task なら todo または done、schedule なら基本的に confirmed を使ってください。',
+    '- status は todo または done のどちらかにしてください。特に完了報告がなければ todo を使ってください。',
     '- detail には補足、条件、場所、制約などを簡潔に要約してください。不要なら空文字にしてください。',
     '- allDay が true のとき startTime と endTime は空文字にしてください。',
     '- allDay が false のとき startTime と endTime は HH:MM:SS 形式にしてください。',
     '- 削除指示があれば、その event は events 配列から除外してください。',
-    '- 手動作成の会議や予定も、ユーザー意図に合うなら編集・削除して構いません。',
+    '- 既存の会議や予定も、ユーザー意図に合うなら編集・削除して構いません。',
     '- 配列順は自然でよいですが、残す event の内容を勝手に落とさないでください。',
     '- message には、何を追加・完了・更新・削除したかを簡潔に書いてください。',
     '- message は自然なLINEメッセージとして、そのまま送れる形にしてください。',
@@ -441,7 +435,7 @@ function formatAgendaList(events) {
   const lines = ['今日の予定です。'];
   for (const [index, event] of events.entries()) {
     const prefix = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
-    lines.push(`${index + 1}. [${event.kind}/${event.status}] ${prefix} ${event.title}`);
+    lines.push(`${index + 1}. [${event.status}] ${prefix} ${event.title}`);
   }
 
   return lines.join('\n');
@@ -457,16 +451,11 @@ function normalizeFullTimeString(value) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
 }
 
-function normalizeAgendaEventKind(value) {
-  return String(value || '').trim().toLowerCase() === 'task' ? 'task' : 'schedule';
-}
-
-function normalizeAgendaEventStatus(value, kind) {
+function normalizeAgendaEventStatus(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'done') return 'done';
   if (raw === 'todo') return 'todo';
-  if (raw === 'confirmed') return 'confirmed';
-  return kind === 'task' ? 'todo' : 'confirmed';
+  return 'todo';
 }
 
 function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEventsById) {
@@ -481,8 +470,7 @@ function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEvent
     }
     seenIds.add(eventId);
 
-    const kind = normalizeAgendaEventKind(rawEvent.kind);
-    const status = normalizeAgendaEventStatus(rawEvent.status, kind);
+    const status = normalizeAgendaEventStatus(rawEvent.status);
     const title = String(rawEvent.title || '').trim().replace(/\s+/g, ' ').slice(0, 120);
     if (!title) {
       throw new Error('event title は必須です。');
@@ -504,7 +492,6 @@ function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEvent
     normalized.push({
       eventId,
       title,
-      kind,
       status,
       detail,
       allDay,
@@ -529,7 +516,7 @@ export async function processUserMessage({ userId, text }) {
 
   const actionPlan = await classifyAction({ text: rawText, dateContext, agendaContext });
 
-  if (actionPlan.action === 'modify_tasks') {
+  if (actionPlan.action === 'modify_events') {
     const currentEvents = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
     const currentEventsById = new Map(currentEvents.map((event) => [String(event.eventId || '').trim(), event]));
     const newEventIds = buildNewAgendaEventIdCandidates();
@@ -575,7 +562,7 @@ export async function processUserMessage({ userId, text }) {
     return `${baseMessage}（Google同期で一部失敗）`;
   }
 
-  if (actionPlan.action === 'list_tasks') {
+  if (actionPlan.action === 'list_events') {
     return formatAgendaList(Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []);
   }
 

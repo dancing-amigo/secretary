@@ -564,8 +564,6 @@ function normalizeGoogleCalendarPulledEvent(event) {
       dateTime: String(event.end.dateTime || '').trim(),
       timeZone: String(event.end.timeZone || '').trim()
     } : { date: '', dateTime: '', timeZone: '' },
-    source: String(event.source || '').trim() || 'external',
-    linkedLocalTaskId: String(event.linkedLocalTaskId || '').trim(),
     calendarId: String(event.calendarId || '').trim(),
     htmlLink: String(event.htmlLink || '').trim(),
     updated: String(event.updated || '').trim()

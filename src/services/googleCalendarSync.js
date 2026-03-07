@@ -137,26 +137,19 @@ function getNextDateKey(dateKey) {
   return nextDate.toISOString().slice(0, 10);
 }
 
-function normalizeAgendaKind(value) {
-  return String(value || '').trim().toLowerCase() === 'task' ? 'task' : 'schedule';
-}
-
-function normalizeAgendaStatus(value, kind = 'schedule') {
+function normalizeAgendaStatus(value) {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'done') return 'done';
   if (raw === 'todo') return 'todo';
-  if (raw === 'confirmed') return 'confirmed';
-  return kind === 'task' ? 'todo' : 'confirmed';
+  return 'todo';
 }
 
 function parseAgendaMetadata(description) {
   const raw = String(description || '').replace(/\r\n/g, '\n');
   if (!raw.trim()) {
     return {
-      kind: 'schedule',
-      status: 'confirmed',
-      detail: '',
-      hasMetadata: false
+      status: 'todo',
+      detail: ''
     };
   }
 
@@ -182,24 +175,19 @@ function parseAgendaMetadata(description) {
     index += 1;
   }
 
-  const kind = normalizeAgendaKind(metadata.kind);
-  const status = normalizeAgendaStatus(metadata.status, kind);
+  const status = normalizeAgendaStatus(metadata.status);
   const detail = metadataCount > 0 ? lines.slice(index).join('\n').trim() : raw.trim();
 
   return {
-    kind,
     status,
-    detail,
-    hasMetadata: metadataCount > 0
+    detail
   };
 }
 
-export function buildAgendaDescription({ kind = 'schedule', status = 'confirmed', detail = '' }) {
-  const normalizedKind = normalizeAgendaKind(kind);
-  const normalizedStatus = normalizeAgendaStatus(status, normalizedKind);
+export function buildAgendaDescription({ status = 'todo', detail = '' }) {
+  const normalizedStatus = normalizeAgendaStatus(status);
   const detailText = String(detail || '').trim();
-  const header = [`kind: ${normalizedKind}`, `status: ${normalizedStatus}`];
-  return detailText ? `${header.join('\n')}\n\n${detailText}` : header.join('\n');
+  return detailText ? `status: ${normalizedStatus}\n\n${detailText}` : `status: ${normalizedStatus}`;
 }
 
 function toAgendaEvent(event) {
@@ -210,7 +198,6 @@ function toAgendaEvent(event) {
   return {
     eventId: String(event.id || '').trim(),
     title: String(event.summary || '').trim(),
-    kind: parsed.kind,
     status: parsed.status,
     detail: parsed.detail,
     allDay,
@@ -228,15 +215,13 @@ function toAgendaEvent(event) {
     },
     htmlLink: String(event.htmlLink || '').trim(),
     updated: String(event.updated || '').trim(),
-    googleEventStatus: String(event.status || '').trim(),
-    hasMetadata: parsed.hasMetadata
+    googleEventStatus: String(event.status || '').trim()
   };
 }
 
 function toAgendaEventPayload({ agendaEvent, dateKey }) {
   const title = String(agendaEvent?.title || '').trim().slice(0, 1024);
-  const kind = normalizeAgendaKind(agendaEvent?.kind);
-  const status = normalizeAgendaStatus(agendaEvent?.status, kind);
+  const status = normalizeAgendaStatus(agendaEvent?.status);
   const detail = String(agendaEvent?.detail || '').trim();
   const allDay = Boolean(agendaEvent?.allDay);
   const startTime = normalizeFullTimeString(agendaEvent?.startTime);
@@ -244,7 +229,7 @@ function toAgendaEventPayload({ agendaEvent, dateKey }) {
 
   const payload = {
     summary: title,
-    description: buildAgendaDescription({ kind, status, detail }),
+    description: buildAgendaDescription({ status, detail }),
     colorId: String(config.googleCalendar.eventColorId || '').trim() || undefined
   };
 
@@ -339,10 +324,9 @@ function formatGoogleError(error) {
   return status ? `${status} ${message}` : message;
 }
 
-function logGoogleCalendarSyncFailure({ dateKey, localTaskId, googleCalendarEventId, operation, payload, error }) {
+function logGoogleCalendarSyncFailure({ dateKey, googleCalendarEventId, operation, payload, error }) {
   console.error('[google-calendar-sync] failed', {
     dateKey,
-    localTaskId,
     googleCalendarEventId,
     calendarId: config.googleCalendar.calendarId,
     operation,
@@ -391,14 +375,12 @@ function isEventRelevantToDate(event, dateKey) {
   return false;
 }
 
-function normalizePulledCalendarEvent({ event, linkedLocalTaskId }) {
+function normalizePulledCalendarEvent(event) {
   const agendaEvent = toAgendaEvent(event);
   if (!agendaEvent?.eventId) return null;
 
   return {
     ...agendaEvent,
-    source: agendaEvent.hasMetadata ? 'managed' : 'external',
-    linkedLocalTaskId: String(linkedLocalTaskId || '').trim(),
     calendarId: config.googleCalendar.calendarId,
     description: String(event?.description || '').trim()
   };
@@ -475,7 +457,7 @@ export async function pullGoogleCalendarEventsForDate({ dateKey, operation = 'un
     const listed = await listCalendarEventsForDate({ dateKey: normalizedDateKey });
     const events = listed.items
       .filter((event) => isEventRelevantToDate(event, normalizedDateKey))
-      .map((event) => normalizePulledCalendarEvent({ event, linkedLocalTaskId: '' }))
+      .map((event) => normalizePulledCalendarEvent(event))
       .filter((event) => event?.eventId);
 
     const completedAt = new Date().toISOString();
@@ -657,7 +639,6 @@ export async function reconcileAgendaEventsForDate({
     } catch (error) {
       logGoogleCalendarSyncFailure({
         dateKey,
-        localTaskId: '',
         googleCalendarEventId: operation.eventId || '',
         operation: `agenda_${operation.type}`,
         payload: formatAgendaOperationPayload(operation.agendaEvent, dateKey),

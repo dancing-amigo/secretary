@@ -1,7 +1,7 @@
 # Step 11: SOUL.md / USER.md 編集アクションの追加
 
 ## 目的
-既存アクション分類（`modify_tasks` / `list_tasks` / `others`）を拡張し、
+既存アクション分類（`modify_events` / `list_events` / `others`）を拡張し、
 `SOUL.md` と `USER.md` を更新できる専用アクションを追加する。
 更新処理とユーザー向け結果出力は分離せず、`edit_soul` / `edit_user` 用の
 LLMコールが一貫して担当する前提を定義する。
@@ -9,8 +9,8 @@ LLMコールが一貫して担当する前提を定義する。
 ## 固定方針
 - Step 11 は仕様定義が主目的であり、機能実装は行わない
 - ActionClassifier の分類先を以下の5種に拡張する
-  - `modify_tasks`
-  - `list_tasks`
+  - `modify_events`
+  - `list_events`
   - `edit_soul`
   - `edit_user`
   - `others`
@@ -29,7 +29,7 @@ LLMコールが一貫して担当する前提を定義する。
 2. 判定ルールの明確化
 - `edit_soul`: AIの人格・口調・振る舞いルール（`SOUL.md`）の追加/修正/削除意図
 - `edit_user`: ユーザー属性・嗜好・前提情報（`USER.md`）の追加/修正/削除意図
-- タスク操作意図は既存どおり `modify_tasks` / `list_tasks` を優先
+- 予定操作意図は既存どおり `modify_events` / `list_events` を優先
 - どれにも該当しない入力は `others`
 
 3. プロンプト更新要件
@@ -81,7 +81,7 @@ LLMコールが一貫して担当する前提を定義する。
 ## 受け入れテスト（最小）
 1. `SOUL.md` の編集依頼入力が `edit_soul` に分類される想定になっている
 2. `USER.md` の編集依頼入力が `edit_user` に分類される想定になっている
-3. タスク編集依頼入力は引き続き `modify_tasks` に分類される想定になっている
+3. 予定編集依頼入力は引き続き `modify_events` に分類される想定になっている
 4. `edit_soul` で編集実行LLMが計画・更新・結果出力まで行う想定になっている
 5. `edit_user` で編集実行LLMが計画・更新・結果出力まで行う想定になっている
 6. 結果出力に「対象ファイル」と「主な変更点」が含まれる想定になっている

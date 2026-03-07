@@ -6,11 +6,11 @@
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
 - LINE自由形式メッセージをLLMで判定し、当日予定の更新・一覧取得・その他応答を返す
 - 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
-- アプリが作成・更新する event の description 先頭には `kind` / `status` を書き込み、task と schedule を表現する
+- アプリが作成・更新する event の description 先頭には `status` を書き込み、完了状態を保持する
 - Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
 
-アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_tasks` は互換名として残っていますが、内部的には Google Calendar event 一覧そのものを更新します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `kind: task|schedule` と `status: todo|done|confirmed` を先頭に保存し、task と schedule を同じ event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
+アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_events` は Google Calendar event 一覧そのものを更新し、`list_events` はその一覧を返します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `status: todo|done` を先頭に保存し、当日の全項目を単一の event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
 
 ## 必須環境変数
 

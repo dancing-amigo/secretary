@@ -83,6 +83,11 @@
 - event description 先頭の `kind` / `status` metadata で task と schedule を同じ event モデルとして管理するようにした
 - `modify_tasks` / `list_tasks` / 夜サマリーを Calendar event ベースへ置き換え、AI への入力も当日予定一覧へ一本化した
 
+### `STEP14.md`
+- Google Calendar 上の当日項目を `event` 単一モデルへ整理し、`kind` / `confirmed` / `managed` / `external` を廃止した
+- action 名を `modify_events` / `list_events` へ改め、分類と文言を event 中心へ揃えた
+- Calendar description の管理 metadata を `status: todo|done` のみに簡素化した
+
 ## 更新ルール
 
 - 新しいプランを `plans/` に追加したら、この README に項目と要約を追記する

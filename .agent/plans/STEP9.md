@@ -15,7 +15,7 @@ Step 1〜8 で分離されている各LLM呼び出しに対して、
 
 ## 対象LLM（3種類）
 1. ActionClassifier
-- 役割: ユーザー入力を `modify_tasks` / `list_tasks` / `others` に分類
+- 役割: ユーザー入力を `modify_events` / `list_events` / `others` に分類
 - 必須コンテキスト: 当日会話履歴（user/assistant）
 
 2. TaskChangePlanner

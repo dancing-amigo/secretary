@@ -12,6 +12,7 @@ let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
 let cachedNotificationStateFileId = null;
 let cachedGoogleCalendarSyncStateFileId = null;
+let cachedStatesFolderId = null;
 let cachedConversationsFolderId = null;
 let cachedLogFileId = null;
 const cachedConversationFileIds = new Map();
@@ -156,8 +157,9 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   if (cacheKey === 'notification' && cachedNotificationStateFileId) return cachedNotificationStateFileId;
   if (cacheKey === 'googleCalendarSync' && cachedGoogleCalendarSyncStateFileId) return cachedGoogleCalendarSyncStateFileId;
 
+  const statesFolderId = await ensureStatesFolderId();
   const existingId = await findDriveChildId({
-    parentId: config.googleDrive.folderId,
+    parentId: statesFolderId,
     name
   });
   if (existingId) {
@@ -169,7 +171,7 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   const { body, contentType } = buildMultipartBody(
     {
       name,
-      parents: [config.googleDrive.folderId],
+      parents: [statesFolderId],
       mimeType: 'application/json'
     },
     JSON.stringify(initialContent, null, 2)
@@ -278,6 +280,32 @@ async function ensureConversationsFolderId() {
   });
 
   cachedConversationsFolderId = createdId;
+  return createdId;
+}
+
+async function ensureStatesFolderId() {
+  if (cachedStatesFolderId) return cachedStatesFolderId;
+
+  const folderName = String(config.googleDrive.statesFolderName || '').trim() || 'states';
+  const existingId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: folderName,
+    mimeType: 'application/vnd.google-apps.folder'
+  });
+
+  if (existingId) {
+    cachedStatesFolderId = existingId;
+    return existingId;
+  }
+
+  const createdId = await createDriveFile({
+    parentId: config.googleDrive.folderId,
+    name: folderName,
+    mimeType: 'application/vnd.google-apps.folder',
+    content: ''
+  });
+
+  cachedStatesFolderId = createdId;
   return createdId;
 }
 

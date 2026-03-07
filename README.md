@@ -9,8 +9,9 @@
 - アプリが作成・更新する event の description 先頭には `status` を書き込み、完了状態を保持する
 - Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
+- Google Drive の `states/` 配下に通知状態と Calendar 同期状態の JSON を保存する
 
-アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_events` は Google Calendar event 一覧そのものを更新し、`list_events` はその一覧を返します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `status: todo|done` を先頭に保存し、当日の全項目を単一の event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
+アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_events` は Google Calendar event 一覧そのものを更新し、`list_events` はその一覧を返します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `status: todo|done` を先頭に保存し、当日の全項目を単一の event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `states/task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
 
 ## 必須環境変数
 
@@ -32,6 +33,7 @@
 - `OPENAI_TASK_MODEL`
 - `OPENAI_SUMMARY_MODEL`
 - `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID`
+- `GOOGLE_DRIVE_STATES_FOLDER_NAME`（既定: `states`）
 - `GOOGLE_DRIVE_NOTIFICATION_STATE_FILE_NAME`
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
 - `GOOGLE_CALENDAR_ENABLED`（未指定時は `GOOGLE_DRIVE_ENABLED` を継承）

@@ -114,9 +114,38 @@ function getTimeZoneOffsetMinutes(timeZone, date) {
   return sign * (hours * 60 + minutes);
 }
 
-function getUtcIsoForLocalDateTime({ dateKey, time, timeZone }) {
-  const [year, month, day] = dateKey.split('-').map(Number);
-  const [hour, minute, second] = time.split(':').map((value) => Number(value || 0));
+function parseLocalDateParts(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new RangeError(`Invalid local date: ${dateKey}`);
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3])
+  };
+}
+
+function parseLocalTimeParts(time) {
+  const match = String(time || '').match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) {
+    throw new RangeError(`Invalid local time: ${time}`);
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw new RangeError(`Invalid local time: ${time}`);
+  }
+
+  return { hour, minute, second };
+}
+
+export function getUtcIsoForLocalDateTime({ dateKey, time, timeZone }) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const { hour, minute, second } = parseLocalTimeParts(time);
   const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   const offsetMinutes = getTimeZoneOffsetMinutes(timeZone, utcGuess);
   return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000).toISOString();

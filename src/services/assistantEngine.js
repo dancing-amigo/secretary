@@ -4,13 +4,10 @@ import {
   getLatestSentNotificationBefore,
   getNotificationRecord,
   readConversationTurns,
-  readTaskFileForDate,
-  readTasksForDate,
-  replaceTaskFileForDate,
   updateNotificationRecord,
   upsertDailyLog
 } from './googleDriveState.js';
-import { syncGoogleCalendarForDate } from './googleCalendarSync.js';
+import { pullGoogleCalendarEventsForDate, reconcileAgendaEventsForDate } from './googleCalendarSync.js';
 import { createStructuredOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
@@ -51,16 +48,39 @@ const NIGHT_SUMMARY_SCHEMA = {
   }
 };
 
-const TASK_REWRITE_SCHEMA = {
+const AGENDA_REWRITE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['outcome', 'content', 'message'],
+  required: ['outcome', 'events', 'message'],
   properties: {
     outcome: {
       type: 'string',
       enum: ['updated', 'clarify']
     },
-    content: { type: 'string' },
+    events: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['id', 'title', 'kind', 'status', 'detail', 'allDay', 'startTime', 'endTime'],
+        properties: {
+          id: { type: 'string' },
+          title: { type: 'string' },
+          kind: {
+            type: 'string',
+            enum: ['task', 'schedule']
+          },
+          status: {
+            type: 'string',
+            enum: ['todo', 'done', 'confirmed']
+          },
+          detail: { type: 'string' },
+          allDay: { type: 'boolean' },
+          startTime: { type: 'string' },
+          endTime: { type: 'string' }
+        }
+      }
+    },
     message: { type: 'string' }
   }
 };
@@ -88,7 +108,7 @@ function getLocalDateContext(date = new Date()) {
   };
 }
 
-function buildActionPrompt({ text, dateKey, localTime, timeZone, taskContext }) {
+function buildActionPrompt({ text, dateKey, localTime, timeZone, agendaContext }) {
   return [
     'あなたは個人向けLINE秘書のアクション分類器です。',
     `現在のローカル日付: ${dateKey}`,
@@ -96,17 +116,17 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, taskContext }) 
     `タイムゾーン: ${timeZone}`,
     '',
     '次の3つから必ず1つだけ選んでください。',
-    '- modify_tasks: ユーザーが今日のタスクを追加・編集・削除・完了報告・補足更新したい意図の発話。',
-    '- list_tasks: ユーザーが今日のタスク一覧を知りたい、確認したい意図の発話。',
+    '- modify_tasks: ユーザーが今日の予定やタスクを追加・編集・削除・完了報告・補足更新したい意図の発話。',
+    '- list_tasks: ユーザーが今日の予定一覧、やること一覧、行動一覧を知りたい意図の発話。',
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
     '',
     '自然な日本語として広く解釈してください。',
-    '可能なら、今日のタスク状況を踏まえて解釈してください。',
+    '可能なら、今日の予定状況を踏まえて解釈してください。',
     'この段階では変更計画の作成はしません。',
     'JSONオブジェクトのみを返してください。',
     '',
-    '今日のタスク情報:',
-    taskContext,
+    '今日の予定一覧:',
+    agendaContext,
     '',
     'ユーザーメッセージ:',
     text
@@ -176,17 +196,51 @@ function formatConversationTurns(turns) {
     .join('\n');
 }
 
-function formatTasksForSummary(tasks) {
-  if (tasks.length === 0) {
-    return '- タスクなし';
+function formatAgendaEventsForSummary(events) {
+  if (events.length === 0) {
+    return '- 予定なし';
   }
 
-  return tasks
-    .map((task) => {
-      const detail = task.detail ? ` / ${task.detail}` : '';
-      return `- [${task.status}] ${task.title} (id: ${task.id})${detail}`;
+  return events
+    .map((event) => {
+      const detail = event.detail ? ` / ${event.detail}` : '';
+      const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
+      return `- [${event.kind}/${event.status}] ${timeText} ${event.title} (id: ${event.eventId})${detail}`;
     })
     .join('\n');
+}
+
+function formatCalendarEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) {
+    return '- 予定なし';
+  }
+
+  return events
+    .map((event) => {
+      const source = event.source === 'managed' ? 'managed' : 'external';
+      const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
+      const detail = event.detail ? ` / ${event.detail}` : '';
+      return `- [${event.kind}/${event.status}/${source}] ${timeText} ${event.title}${detail} / eventId: ${event.eventId}`;
+    })
+    .join('\n');
+}
+
+function formatAgendaContext(calendarSnapshot) {
+  if (!calendarSnapshot?.enabled) {
+    return '- カレンダー同期は無効です';
+  }
+
+  if (calendarSnapshot.failed) {
+    return `- カレンダー取得失敗: ${String(calendarSnapshot.error || 'unknown error')}`;
+  }
+
+  const header = [
+    `- calendarId: ${calendarSnapshot.calendarId || '(unknown)'}`,
+    `- 対象日付: ${calendarSnapshot.dateKey || '(unknown)'}`,
+    `- 取得期間: ${calendarSnapshot.windowStart || '(unknown)'} -> ${calendarSnapshot.windowEnd || '(unknown)'}`
+  ];
+
+  return [...header, formatCalendarEvents(calendarSnapshot.events)].join('\n');
 }
 
 function normalizeSummaryList(items) {
@@ -218,7 +272,7 @@ function formatNightSummaryLog(summary, metadata) {
     `- 送信対象ユーザー: ${metadata.userId || '(unknown)'}`,
     `- 会話対象期間: ${metadata.since} -> ${metadata.until}`,
     `- 対象会話数: ${metadata.conversationCount}`,
-    `- 当日タスク数: ${metadata.taskCount}`
+    `- 当日予定数: ${metadata.eventCount}`
   ];
 
   return [
@@ -242,7 +296,7 @@ function formatNightSummaryLog(summary, metadata) {
   ].join('\n');
 }
 
-function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationText, taskText }) {
+function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
   return [
     'あなたは個人向けLINE秘書の日次サマリー生成役です。',
     `対象日付: ${dateKey}`,
@@ -265,18 +319,18 @@ function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
     '会話履歴:',
     conversationText,
     '',
-    '当日タスク:',
-    taskText
+    '当日の予定一覧:',
+    agendaText
   ].join('\n');
 }
 
-function buildNewTaskIdCandidates(count = 5) {
-  return Array.from({ length: count }, () => `task-${randomUUID()}`);
+function buildNewAgendaEventIdCandidates(count = 5) {
+  return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
 }
 
-function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileContent, newTaskIds, userId }) {
+function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaContext, newEventIds, userId }) {
   return [
-    'あなたは今日のタスクファイル全文とLINE返信文を同時に作る役割です。',
+    'あなたは今日の Google Calendar event 一覧の最終状態とLINE返信文を同時に作る役割です。',
     `現在のローカル日付: ${dateKey}`,
     `現在のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
@@ -285,69 +339,65 @@ function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileConten
     'outcome:',
     '- updated: 安全に更新できる場合',
     '- clarify: 対象が曖昧で安全に更新できない場合',
-    'content:',
-    '- updated のときは、そのまま tasks/YYYY-MM-DD.md に書き込める Markdown 本文',
-    '- clarify のときは空文字でよい',
+    'events:',
+    '- updated のときは、その日の最終的な event 一覧を配列で返してください',
+    '- clarify のときは空配列でよい',
     'message:',
     '- updated のときは、LINE に送る変更完了メッセージ',
     '- clarify のときは、確認したい内容を短い日本語で返す',
     '',
     '出力フォーマット:',
-    `# Tasks ${dateKey}`,
-    '',
-    '## Items',
-    '- [todo|done] タスクタイトル',
-    '  - id: task-...',
-    '  - userId: USER_ID',
-    '  - detail: 補足情報',
+    '{"outcome":"updated","events":[{"id":"...","title":"...","kind":"task|schedule","status":"todo|done|confirmed","detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
     '',
     'ルール:',
-    '- 変更がないタスクも含めて、当日ファイルの最終状態を全文で返してください。',
-    '- 既存タスクを残す場合は、その id と userId を必ずそのまま維持してください。',
-    '- 新規タスクを追加する場合は、下の新規 id 候補だけを使ってください。',
-    '- 新規タスクの userId は必ず現在のユーザーIDを使ってください。',
-    '- title は短く、行動が分かる表現にしてください。',
-    '- detail には時間、条件、補足、制約のみを簡潔に要約してください。不要なら detail 行を省略して構いません。',
-    '- 完了報告は status を done にしてください。',
-    '- 削除指示があれば、そのタスクは最終ファイルから除外してください。',
-    '- タスクが 0 件なら、Items セクションには "- まだタスクはありません" の 1 行だけを書いてください。',
-    '- タスクの並び順は自然でよいですが、残すタスクの内容を勝手に落とさないでください。',
+    '- 変更がない event も含めて、当日一覧の最終状態を events 配列へすべて返してください。',
+    '- 既存 event を残す場合は、その id を必ずそのまま維持してください。',
+    '- 新規 event を追加する場合は、下の新規 id 候補だけを使ってください。',
+    '- title は短く、何の予定か分かる表現にしてください。',
+    '- kind は task または schedule のどちらかにしてください。',
+    '- status は task なら todo または done、schedule なら基本的に confirmed を使ってください。',
+    '- detail には補足、条件、場所、制約などを簡潔に要約してください。不要なら空文字にしてください。',
+    '- allDay が true のとき startTime と endTime は空文字にしてください。',
+    '- allDay が false のとき startTime と endTime は HH:MM:SS 形式にしてください。',
+    '- 削除指示があれば、その event は events 配列から除外してください。',
+    '- 手動作成の会議や予定も、ユーザー意図に合うなら編集・削除して構いません。',
+    '- 配列順は自然でよいですが、残す event の内容を勝手に落とさないでください。',
     '- message には、何を追加・完了・更新・削除したかを簡潔に書いてください。',
     '- message は自然なLINEメッセージとして、そのまま送れる形にしてください。',
     '',
     `現在のユーザーID: ${userId || '(empty)'}`,
-    '新規タスク用の id 候補:',
-    ...newTaskIds.map((id) => `- ${id}`),
+    '新規 event 用の id 候補:',
+    ...newEventIds.map((id) => `- ${id}`),
     '',
-    '現在のファイル内容:',
-    fileContent,
+    '現在の当日予定一覧:',
+    agendaContext,
     '',
     'ユーザーメッセージ:',
     text
   ].join('\n');
 }
 
-async function classifyAction({ text, dateContext, taskContext }) {
+async function classifyAction({ text, dateContext, agendaContext }) {
   return createStructuredOutput({
     model: config.openai.actionModel,
     schemaName: 'action_plan',
     schema: ACTION_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildActionPrompt({ text, ...dateContext, taskContext })
+    userPrompt: buildActionPrompt({ text, ...dateContext, agendaContext })
   });
 }
 
-async function rewriteTaskFile({ text, dateContext, fileContent, newTaskIds, userId }) {
+async function rewriteAgendaEvents({ text, dateContext, agendaContext, newEventIds, userId }) {
   return createStructuredOutput({
     model: config.openai.taskModel,
-    schemaName: 'task_rewrite',
-    schema: TASK_REWRITE_SCHEMA,
+    schemaName: 'agenda_rewrite',
+    schema: AGENDA_REWRITE_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildTaskRewritePrompt({ text, ...dateContext, fileContent, newTaskIds, userId })
+    userPrompt: buildAgendaRewritePrompt({ text, ...dateContext, agendaContext, newEventIds, userId })
   });
 }
 
-async function generateNightSummary({ dateKey, localTime, timeZone, userId, turns, tasks, since, until }) {
+async function generateNightSummary({ dateKey, localTime, timeZone, userId, turns, events, since, until }) {
   const raw = await createStructuredOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     schemaName: 'night_summary',
@@ -358,7 +408,7 @@ async function generateNightSummary({ dateKey, localTime, timeZone, userId, turn
       localTime,
       timeZone,
       conversationText: formatConversationTurns(turns),
-      taskText: formatTasksForSummary(tasks)
+      agendaText: formatAgendaEventsForSummary(events)
     })
   });
 
@@ -378,23 +428,92 @@ async function generateNightSummary({ dateKey, localTime, timeZone, userId, turn
       since,
       until,
       conversationCount: turns.length,
-      taskCount: tasks.length
+      eventCount: events.length
     })
   };
 }
 
-function formatTaskList(tasks) {
-  if (tasks.length === 0) {
-    return '今日のタスクはありません。';
+function formatAgendaList(events) {
+  if (events.length === 0) {
+    return '今日の予定はありません。';
   }
 
-  const lines = ['今日のタスクです。'];
-  for (const [index, task] of tasks.entries()) {
-    const statusLabel = task.status === 'done' ? 'done' : 'todo';
-    lines.push(`${index + 1}. [${statusLabel}] ${task.title}`);
+  const lines = ['今日の予定です。'];
+  for (const [index, event] of events.entries()) {
+    const prefix = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
+    lines.push(`${index + 1}. [${event.kind}/${event.status}] ${prefix} ${event.title}`);
   }
 
   return lines.join('\n');
+}
+
+function normalizeFullTimeString(value) {
+  const match = String(value || '').trim().match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (hour > 23 || minute > 59 || second > 59) return '';
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
+}
+
+function normalizeAgendaEventKind(value) {
+  return String(value || '').trim().toLowerCase() === 'task' ? 'task' : 'schedule';
+}
+
+function normalizeAgendaEventStatus(value, kind) {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'done') return 'done';
+  if (raw === 'todo') return 'todo';
+  if (raw === 'confirmed') return 'confirmed';
+  return kind === 'task' ? 'todo' : 'confirmed';
+}
+
+function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEventsById) {
+  const allowedNewIds = new Set(allowedNewEventIds);
+  const normalized = [];
+  const seenIds = new Set();
+
+  for (const rawEvent of Array.isArray(events) ? events : []) {
+    const eventId = String(rawEvent?.id || '').trim();
+    if (!eventId || seenIds.has(eventId)) {
+      throw new Error('返却された event 一覧に不正な id があります。');
+    }
+    seenIds.add(eventId);
+
+    const kind = normalizeAgendaEventKind(rawEvent.kind);
+    const status = normalizeAgendaEventStatus(rawEvent.status, kind);
+    const title = String(rawEvent.title || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+    if (!title) {
+      throw new Error('event title は必須です。');
+    }
+
+    const detail = String(rawEvent.detail || '').trim().replace(/\s+/g, ' ').slice(0, 280);
+    const allDay = Boolean(rawEvent.allDay);
+    const startTime = allDay ? '' : normalizeFullTimeString(rawEvent.startTime);
+    const endTime = allDay ? '' : normalizeFullTimeString(rawEvent.endTime);
+    if (!allDay && (!startTime || !endTime || startTime >= endTime)) {
+      throw new Error('時間付き event の startTime/endTime が不正です。');
+    }
+
+    const existing = currentEventsById.get(eventId);
+    if (!existing && !allowedNewIds.has(eventId)) {
+      throw new Error('新規 event の id が許可された候補に含まれていません。');
+    }
+
+    normalized.push({
+      eventId,
+      title,
+      kind,
+      status,
+      detail,
+      allDay,
+      startTime,
+      endTime
+    });
+  }
+
+  return normalized;
 }
 
 export async function processUserMessage({ userId, text }) {
@@ -404,38 +523,39 @@ export async function processUserMessage({ userId, text }) {
   }
 
   const dateContext = getLocalDateContext();
-  let taskContext = '今日のタスク情報は取得できませんでした。タスク文脈なしで判断してください。';
-  try {
-    taskContext = await readTaskFileForDate(dateContext.dateKey);
-  } catch {}
+  const executionContext = createExecutionContext(dateContext);
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('line_message');
+  const agendaContext = formatAgendaContext(calendarSnapshot);
 
-  const actionPlan = await classifyAction({ text: rawText, dateContext, taskContext });
+  const actionPlan = await classifyAction({ text: rawText, dateContext, agendaContext });
 
   if (actionPlan.action === 'modify_tasks') {
-    const currentFileContent = await readTaskFileForDate(dateContext.dateKey);
-    const newTaskIds = buildNewTaskIdCandidates();
-    const rewriteResult = await rewriteTaskFile({
+    const currentEvents = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
+    const currentEventsById = new Map(currentEvents.map((event) => [String(event.eventId || '').trim(), event]));
+    const newEventIds = buildNewAgendaEventIdCandidates();
+    const rewriteResult = await rewriteAgendaEvents({
       text: rawText,
       dateContext,
       userId,
-      fileContent: currentFileContent,
-      newTaskIds
+      agendaContext,
+      newEventIds
     });
 
     if (rewriteResult.outcome === 'clarify') {
-      return String(rewriteResult.message || '').trim() || 'どのタスクを更新するか確認させてください。';
+      return String(rewriteResult.message || '').trim() || 'どの予定を更新するか確認させてください。';
     }
 
-    const nextTasks = await replaceTaskFileForDate({
-      dateKey: dateContext.dateKey,
-      content: String(rewriteResult.content || '').trim(),
-      allowedNewTaskIds: newTaskIds,
-      currentUserId: userId
-    });
+    const nextEvents = normalizeAgendaEventsFromModel(
+      rewriteResult.events,
+      newEventIds,
+      currentEventsById
+    );
 
-    const calendarSyncResult = await syncGoogleCalendarForDate({
+    const calendarSyncResult = await reconcileAgendaEventsForDate({
       dateKey: dateContext.dateKey,
-      localTasks: nextTasks
+      currentEvents,
+      nextEvents,
+      allowedNewEventIds: newEventIds
     });
     const syncResult = {
       enabled: calendarSyncResult.enabled,
@@ -443,7 +563,7 @@ export async function processUserMessage({ userId, text }) {
       retryable: calendarSyncResult.retryable
     };
 
-    const baseMessage = String(rewriteResult.message || '').trim() || '今日のタスクを更新しました。';
+    const baseMessage = String(rewriteResult.message || '').trim() || '今日の予定を更新しました。';
     if (!syncResult.enabled || syncResult.failed === 0) {
       return baseMessage;
     }
@@ -456,8 +576,7 @@ export async function processUserMessage({ userId, text }) {
   }
 
   if (actionPlan.action === 'list_tasks') {
-    const tasks = await readTasksForDate(dateContext.dateKey);
-    return formatTaskList(tasks);
+    return formatAgendaList(Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []);
   }
 
   if (actionPlan.action === 'others') {
@@ -468,10 +587,15 @@ export async function processUserMessage({ userId, text }) {
 }
 
 export async function runMorningPlan() {
+  const dateContext = getLocalDateContext();
+  const executionContext = createExecutionContext(dateContext);
+  await executionContext.getCalendarSnapshot('morning_plan');
   return '朝です';
 }
 
 export async function prepareNightReview({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('night_review');
   const existing = await getNotificationRecord({ slot: 'night', dateKey });
   if (existing?.sentAt) {
     return {
@@ -494,14 +618,14 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
     timeZone
   });
   const turns = await readConversationTurns({ userId, since, until });
-  const tasks = await readTasksForDate(dateKey);
+  const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
   const summary = await generateNightSummary({
     dateKey,
     localTime,
     timeZone,
     userId,
     turns,
-    tasks,
+    events,
     since,
     until
   });
@@ -515,7 +639,7 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
         since,
         until,
         conversationCount: turns.length,
-        taskCount: tasks.length
+        eventCount: events.length
       }
     }
   });
@@ -551,4 +675,20 @@ export async function runNightReview() {
     timeZone: dateContext.timeZone
   });
   return review.text;
+}
+
+function createExecutionContext(dateContext) {
+  let calendarSnapshotPromise = null;
+
+  return {
+    async getCalendarSnapshot(operation) {
+      if (!calendarSnapshotPromise) {
+        calendarSnapshotPromise = pullGoogleCalendarEventsForDate({
+          dateKey: dateContext.dateKey,
+          operation
+        });
+      }
+      return calendarSnapshotPromise;
+    }
+  };
 }

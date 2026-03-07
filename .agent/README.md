@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP5.md`
-- Google Tasks ではなく Google Calendar event を、アプリ行動前に毎回取り込む計画
-- 定期実行ではなく、メッセージ受信や各処理開始時の都度同期を前提にする
-- 予定重複判定や、カレンダー上の手動追加予定の理解に使う
-
 ### `STEP6.md`
 - Step 5 で同期済みの Google Calendar event を `log.md` に記録する計画
 - 予定取得そのものは持たず、`log.md` 更新責務に限定する
@@ -77,6 +72,16 @@
 - `modify_tasks` 後に当日タスク全体を Google Calendar event へリコンシリエーションする実装を追加した
 - 時刻レンジがあるタスクは時間付きイベント、時刻レンジがないタスクは終日イベントとして同期する構成にした
 - `task-sync-state.json` に `localTaskId` と `googleCalendarEventId` の対応関係、および同期失敗ログを保持し、失敗時は Vercel log にも詳細を出すようにした
+
+### `STEP5.md`
+- LINE受信時、朝通知前、夜サマリー前に当日 Google Calendar event を読取同期する実装を追加した
+- 取得した予定を `task-sync-state.json` に日付単位スナップショットとして保存し、同期失敗時も処理継続する構成にした
+- ActionClassifier と task 更新 LLM に当日予定一覧を注入し、手動追加・編集された予定も判断材料に含めるようにした
+
+### `STEP13.md`
+- Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した
+- event description 先頭の `kind` / `status` metadata で task と schedule を同じ event モデルとして管理するようにした
+- `modify_tasks` / `list_tasks` / 夜サマリーを Calendar event ベースへ置き換え、AI への入力も当日予定一覧へ一本化した
 
 ## 更新ルール
 

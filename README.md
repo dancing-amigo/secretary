@@ -4,14 +4,13 @@
 
 - バンクーバー時間の朝ウィンドウ `07:30-08:30` に `朝です` を1回だけ送信
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
-- LINE自由形式メッセージをLLMで判定し、当日タスクの更新・一覧取得・その他応答を返す
-- Google Drive の `tasks/YYYY-MM-DD.md` に日次タスクを保存する
-- `modify_tasks` 後に Google Calendar へ順方向同期する
-- `14:00〜18:00` のような時刻レンジがあるタスクは時間付きイベント、時刻なしタスクは終日イベントとして作る
+- LINE自由形式メッセージをLLMで判定し、当日予定の更新・一覧取得・その他応答を返す
+- 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
+- アプリが作成・更新する event の description 先頭には `kind` / `status` を書き込み、task と schedule を表現する
 - Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
 
-アクション判定は、ユーザー入力に加えて Google Drive 上の当日 `tasks/YYYY-MM-DD.md` を参照して行います。タスク更新系は `modify_tasks` に統一されています。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、`modify_tasks` 用 LLM は現在の `tasks/YYYY-MM-DD.md` 全文とユーザー指示をもとに、更新後の Markdown 全文をそのまま返します。プログラム側はその Markdown を検証して Google Drive に書き込み、その後 Google Calendar の同一カレンダーへリコンシリエーションします。`detail` などから時刻レンジを抽出できたタスクは時間付きイベント、時刻なしタスクは終日イベントとして作成し、完了タスクはカレンダーから削除します。Google Calendar との対応関係と同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、`list_tasks` は保存済みの `title` / `status` のみを返します。
+アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_tasks` は互換名として残っていますが、内部的には Google Calendar event 一覧そのものを更新します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `kind: task|schedule` と `status: todo|done|confirmed` を先頭に保存し、task と schedule を同じ event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
 
 ## 必須環境変数
 

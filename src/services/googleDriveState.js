@@ -59,7 +59,7 @@ function normalizeConversationState(state) {
 
 function normalizeGoogleCalendarSyncState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    return { mappings: {}, failures: [] };
+    return { mappings: {}, failures: [], pulls: {} };
   }
 
   if (!state.mappings || typeof state.mappings !== 'object' || Array.isArray(state.mappings)) {
@@ -68,6 +68,10 @@ function normalizeGoogleCalendarSyncState(state) {
 
   if (!Array.isArray(state.failures)) {
     state.failures = [];
+  }
+
+  if (!state.pulls || typeof state.pulls !== 'object' || Array.isArray(state.pulls)) {
+    state.pulls = {};
   }
 
   return state;
@@ -525,7 +529,7 @@ async function readGoogleCalendarSyncState() {
 
   const fileId = await findStateFileId({
     name: config.googleCalendar.syncStateFileName,
-    initialContent: { mappings: {}, failures: [] },
+    initialContent: { mappings: {}, failures: [], pulls: {} },
     cacheKey: 'googleCalendarSync'
   });
   const text = (await readDriveTextFile(fileId)).trim();
@@ -541,7 +545,7 @@ async function readGoogleCalendarSyncState() {
 async function writeGoogleCalendarSyncState(state) {
   const fileId = await findStateFileId({
     name: config.googleCalendar.syncStateFileName,
-    initialContent: { mappings: {}, failures: [] },
+    initialContent: { mappings: {}, failures: [], pulls: {} },
     cacheKey: 'googleCalendarSync'
   });
   await writeDriveTextFile(
@@ -838,6 +842,96 @@ export async function appendGoogleCalendarSyncFailure(entry) {
   state.failures = [...state.failures, normalizedEntry].slice(-200);
   await writeGoogleCalendarSyncState(state);
   return normalizedEntry;
+}
+
+function normalizeGoogleCalendarPulledEvent(event) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) return null;
+
+  const eventId = String(event.eventId || '').trim();
+  if (!eventId) return null;
+
+  return {
+    eventId,
+    status: String(event.status || '').trim(),
+    summary: String(event.summary || '').trim().slice(0, 1024),
+    description: String(event.description || '').trim().slice(0, 8192),
+    start: event.start && typeof event.start === 'object' ? {
+      date: String(event.start.date || '').trim(),
+      dateTime: String(event.start.dateTime || '').trim(),
+      timeZone: String(event.start.timeZone || '').trim()
+    } : { date: '', dateTime: '', timeZone: '' },
+    end: event.end && typeof event.end === 'object' ? {
+      date: String(event.end.date || '').trim(),
+      dateTime: String(event.end.dateTime || '').trim(),
+      timeZone: String(event.end.timeZone || '').trim()
+    } : { date: '', dateTime: '', timeZone: '' },
+    source: String(event.source || '').trim() || 'external',
+    linkedLocalTaskId: String(event.linkedLocalTaskId || '').trim(),
+    calendarId: String(event.calendarId || '').trim(),
+    htmlLink: String(event.htmlLink || '').trim(),
+    updated: String(event.updated || '').trim()
+  };
+}
+
+export async function writeGoogleCalendarPullSnapshot({
+  dateKey,
+  calendarId,
+  startedAt,
+  completedAt,
+  windowStart,
+  windowEnd,
+  status,
+  operation,
+  error = '',
+  events = []
+}) {
+  const normalizedDateKey = String(dateKey || '').trim();
+  if (!normalizedDateKey) {
+    throw new Error('dateKey is required');
+  }
+
+  const state = await readGoogleCalendarSyncState();
+  state.pulls[normalizedDateKey] = {
+    calendarId: String(calendarId || '').trim(),
+    startedAt: String(startedAt || '').trim(),
+    completedAt: String(completedAt || '').trim(),
+    windowStart: String(windowStart || '').trim(),
+    windowEnd: String(windowEnd || '').trim(),
+    status: String(status || '').trim() || 'unknown',
+    operation: String(operation || '').trim(),
+    error: String(error || '').trim().slice(0, 500),
+    events: (Array.isArray(events) ? events : [])
+      .map((event) => normalizeGoogleCalendarPulledEvent(event))
+      .filter(Boolean)
+      .slice(0, 500)
+  };
+  await writeGoogleCalendarSyncState(state);
+  return state.pulls[normalizedDateKey];
+}
+
+export async function readGoogleCalendarPullSnapshotForDate(dateKey) {
+  const normalizedDateKey = String(dateKey || '').trim();
+  if (!normalizedDateKey) return null;
+
+  const state = await readGoogleCalendarSyncState();
+  const snapshot = state.pulls?.[normalizedDateKey];
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return null;
+  }
+
+  return {
+    calendarId: String(snapshot.calendarId || '').trim(),
+    startedAt: String(snapshot.startedAt || '').trim(),
+    completedAt: String(snapshot.completedAt || '').trim(),
+    windowStart: String(snapshot.windowStart || '').trim(),
+    windowEnd: String(snapshot.windowEnd || '').trim(),
+    status: String(snapshot.status || '').trim(),
+    operation: String(snapshot.operation || '').trim(),
+    error: String(snapshot.error || '').trim(),
+    events: (Array.isArray(snapshot.events) ? snapshot.events : [])
+      .map((event) => normalizeGoogleCalendarPulledEvent(event))
+      .filter(Boolean)
+  };
 }
 
 export async function reserveNotificationWindow({ slot, dateKey, localTime, now = new Date() }) {

@@ -4,7 +4,8 @@ import {
   appendGoogleCalendarSyncFailure,
   readGoogleCalendarSyncMappingsForDate,
   removeGoogleCalendarSyncMapping,
-  upsertGoogleCalendarSyncMapping
+  upsertGoogleCalendarSyncMapping,
+  writeGoogleCalendarPullSnapshot
 } from './googleDriveState.js';
 
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -29,6 +30,16 @@ function normalizeTimeParts(hour, minute) {
   if (!Number.isInteger(h) || !Number.isInteger(m)) return null;
   if (h < 0 || h > 23 || m < 0 || m > 59) return null;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+}
+
+function normalizeFullTimeString(value) {
+  const match = String(value || '').trim().match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return '';
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (hour > 23 || minute > 59 || second > 59) return '';
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
 }
 
 function getTimeZoneOffsetMinutes(timeZone, date) {
@@ -117,6 +128,114 @@ export function extractTimeRange(text) {
   return null;
 }
 
+function extractTimePart(dateTime) {
+  const match = String(dateTime || '').trim().match(/T(\d{2}:\d{2}:\d{2})/);
+  return match ? match[1] : '';
+}
+
+function getNextDateKey(dateKey) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const nextDate = new Date(Date.UTC(year, month - 1, day));
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  return nextDate.toISOString().slice(0, 10);
+}
+
+function normalizeAgendaKind(value) {
+  return String(value || '').trim().toLowerCase() === 'task' ? 'task' : 'schedule';
+}
+
+function normalizeAgendaStatus(value, kind = 'schedule') {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'done') return 'done';
+  if (raw === 'todo') return 'todo';
+  if (raw === 'confirmed') return 'confirmed';
+  return kind === 'task' ? 'todo' : 'confirmed';
+}
+
+function parseAgendaMetadata(description) {
+  const raw = String(description || '').replace(/\r\n/g, '\n');
+  if (!raw.trim()) {
+    return {
+      kind: 'schedule',
+      status: 'confirmed',
+      detail: '',
+      hasMetadata: false
+    };
+  }
+
+  const lines = raw.split('\n');
+  const metadata = {};
+  let index = 0;
+  let metadataCount = 0;
+
+  while (index < lines.length) {
+    const line = lines[index].trim();
+    if (!line) {
+      index += 1;
+      break;
+    }
+
+    const match = line.match(/^(kind|status):\s*(.+)$/i);
+    if (!match) {
+      break;
+    }
+
+    metadata[match[1].toLowerCase()] = match[2].trim();
+    metadataCount += 1;
+    index += 1;
+  }
+
+  const kind = normalizeAgendaKind(metadata.kind);
+  const status = normalizeAgendaStatus(metadata.status, kind);
+  const detail = metadataCount > 0 ? lines.slice(index).join('\n').trim() : raw.trim();
+
+  return {
+    kind,
+    status,
+    detail,
+    hasMetadata: metadataCount > 0
+  };
+}
+
+export function buildAgendaDescription({ kind = 'schedule', status = 'confirmed', detail = '' }) {
+  const normalizedKind = normalizeAgendaKind(kind);
+  const normalizedStatus = normalizeAgendaStatus(status, normalizedKind);
+  const detailText = String(detail || '').trim();
+  const header = [`kind: ${normalizedKind}`, `status: ${normalizedStatus}`];
+  return detailText ? `${header.join('\n')}\n\n${detailText}` : header.join('\n');
+}
+
+function toAgendaEvent(event) {
+  if (!event || typeof event !== 'object') return null;
+  const parsed = parseAgendaMetadata(event.description);
+  const allDay = Boolean(event.start?.date && event.end?.date);
+
+  return {
+    eventId: String(event.id || '').trim(),
+    title: String(event.summary || '').trim(),
+    kind: parsed.kind,
+    status: parsed.status,
+    detail: parsed.detail,
+    allDay,
+    startTime: allDay ? '' : extractTimePart(event.start?.dateTime),
+    endTime: allDay ? '' : extractTimePart(event.end?.dateTime),
+    start: {
+      date: String(event.start?.date || '').trim(),
+      dateTime: String(event.start?.dateTime || '').trim(),
+      timeZone: String(event.start?.timeZone || '').trim()
+    },
+    end: {
+      date: String(event.end?.date || '').trim(),
+      dateTime: String(event.end?.dateTime || '').trim(),
+      timeZone: String(event.end?.timeZone || '').trim()
+    },
+    htmlLink: String(event.htmlLink || '').trim(),
+    updated: String(event.updated || '').trim(),
+    googleEventStatus: String(event.status || '').trim(),
+    hasMetadata: parsed.hasMetadata
+  };
+}
+
 function toCalendarEventPayload({ task, dateKey, timeRange }) {
   const base = {
     summary: String(task.title || '').trim().slice(0, 1024),
@@ -155,6 +274,50 @@ function toCalendarEventPayload({ task, dateKey, timeRange }) {
       dateTime: getCalendarRfc3339ForLocalDateTime({
         dateKey,
         time: timeRange.endTime,
+        timeZone: config.tz
+      }),
+      timeZone: config.tz
+    }
+  };
+}
+
+function toAgendaEventPayload({ agendaEvent, dateKey }) {
+  const title = String(agendaEvent?.title || '').trim().slice(0, 1024);
+  const kind = normalizeAgendaKind(agendaEvent?.kind);
+  const status = normalizeAgendaStatus(agendaEvent?.status, kind);
+  const detail = String(agendaEvent?.detail || '').trim();
+  const allDay = Boolean(agendaEvent?.allDay);
+  const startTime = normalizeFullTimeString(agendaEvent?.startTime);
+  const endTime = normalizeFullTimeString(agendaEvent?.endTime);
+
+  const payload = {
+    summary: title,
+    description: buildAgendaDescription({ kind, status, detail }),
+    colorId: String(config.googleCalendar.eventColorId || '').trim() || undefined
+  };
+
+  if (allDay) {
+    return {
+      ...payload,
+      start: { date: dateKey },
+      end: { date: getNextDateKey(dateKey) }
+    };
+  }
+
+  return {
+    ...payload,
+    start: {
+      dateTime: getCalendarRfc3339ForLocalDateTime({
+        dateKey,
+        time: startTime,
+        timeZone: config.tz
+      }),
+      timeZone: config.tz
+    },
+    end: {
+      dateTime: getCalendarRfc3339ForLocalDateTime({
+        dateKey,
+        time: endTime,
         timeZone: config.tz
       }),
       timeZone: config.tz
@@ -283,6 +446,79 @@ function logGoogleCalendarSyncFailure({ dateKey, localTaskId, googleCalendarEven
   });
 }
 
+function getDateWindowForCalendarPull(dateKey) {
+  return {
+    timeMin: getCalendarRfc3339ForLocalDateTime({
+      dateKey,
+      time: '00:00:00',
+      timeZone: config.tz
+    }),
+    timeMax: getCalendarRfc3339ForLocalDateTime({
+      dateKey,
+      time: '23:59:59',
+      timeZone: config.tz
+    })
+  };
+}
+
+function extractDateKeyFromEventBoundary(boundary) {
+  const date = String(boundary?.date || '').trim();
+  if (date) return date;
+
+  const dateTime = String(boundary?.dateTime || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(dateTime)) {
+    return dateTime.slice(0, 10);
+  }
+
+  return '';
+}
+
+function isEventRelevantToDate(event, dateKey) {
+  const startKey = extractDateKeyFromEventBoundary(event?.start);
+  const endKey = extractDateKeyFromEventBoundary(event?.end);
+  if (startKey === dateKey) return true;
+  if (!endKey) return false;
+  if (startKey && endKey) {
+    return startKey <= dateKey && endKey >= dateKey;
+  }
+  return false;
+}
+
+function normalizePulledCalendarEvent({ event, linkedLocalTaskId }) {
+  const agendaEvent = toAgendaEvent(event);
+  if (!agendaEvent?.eventId) return null;
+
+  return {
+    ...agendaEvent,
+    source: agendaEvent.hasMetadata ? 'managed' : 'external',
+    linkedLocalTaskId: String(linkedLocalTaskId || '').trim(),
+    calendarId: config.googleCalendar.calendarId,
+    description: String(event?.description || '').trim()
+  };
+}
+
+async function listCalendarEventsForDate({ dateKey }) {
+  const { timeMin, timeMax } = getDateWindowForCalendarPull(dateKey);
+  const response = await googleCalendarRequest({
+    method: 'get',
+    url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events`,
+    params: {
+      singleEvents: true,
+      orderBy: 'startTime',
+      showDeleted: false,
+      timeMin,
+      timeMax,
+      maxResults: 2500
+    }
+  });
+
+  return {
+    items: Array.isArray(response.data?.items) ? response.data.items : [],
+    timeMin,
+    timeMax
+  };
+}
+
 async function createCalendarEvent({ task, dateKey, timeRange }) {
   const payload = toCalendarEventPayload({ task, dateKey, timeRange });
   const response = await googleCalendarRequest({
@@ -310,6 +546,26 @@ async function deleteCalendarEvent(googleCalendarEventId) {
     method: 'delete',
     url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events/${encodeURIComponent(googleCalendarEventId)}`
   });
+}
+
+async function createAgendaEvent({ agendaEvent, dateKey }) {
+  const response = await googleCalendarRequest({
+    method: 'post',
+    url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events`,
+    data: toAgendaEventPayload({ agendaEvent, dateKey })
+  });
+
+  return response.data;
+}
+
+async function updateAgendaEvent({ eventId, agendaEvent, dateKey }) {
+  const response = await googleCalendarRequest({
+    method: 'patch',
+    url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events/${encodeURIComponent(eventId)}`,
+    data: toAgendaEventPayload({ agendaEvent, dateKey })
+  });
+
+  return response.data;
 }
 
 async function recordFailure({ dateKey, localTaskId, googleCalendarEventId, operation, error }) {
@@ -439,6 +695,246 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
         googleCalendarEventId: operation.mapping?.googleCalendarEventId || '',
         operation: `calendar_${operation.type}`,
         error
+      });
+      summary.failed += 1;
+      if (isRetryableGoogleError(error)) {
+        summary.retryable += 1;
+      }
+      summary.errors.push(formatGoogleError(error));
+    }
+  }
+
+  return summary;
+}
+
+export async function pullGoogleCalendarEventsForDate({ dateKey, operation = 'unknown' } = {}) {
+  const configError = googleCalendarConfigError();
+  if (configError) {
+    return {
+      enabled: false,
+      status: 'disabled',
+      failed: false,
+      operation,
+      calendarId: config.googleCalendar.calendarId,
+      dateKey: String(dateKey || '').trim(),
+      events: [],
+      error: configError
+    };
+  }
+
+  const normalizedDateKey = String(dateKey || '').trim();
+  const mappings = await readGoogleCalendarSyncMappingsForDate(normalizedDateKey);
+  const linkedLocalTaskIdByEventId = new Map(
+    mappings
+      .filter((mapping) => String(mapping.googleCalendarEventId || '').trim())
+      .map((mapping) => [String(mapping.googleCalendarEventId || '').trim(), String(mapping.localTaskId || '').trim()])
+  );
+
+  const startedAt = new Date().toISOString();
+
+  try {
+    const listed = await listCalendarEventsForDate({ dateKey: normalizedDateKey });
+    const events = listed.items
+      .filter((event) => isEventRelevantToDate(event, normalizedDateKey))
+      .map((event) => normalizePulledCalendarEvent({
+        event,
+        linkedLocalTaskId: linkedLocalTaskIdByEventId.get(String(event.id || '').trim()) || ''
+      }))
+      .filter((event) => event?.eventId);
+
+    const completedAt = new Date().toISOString();
+    await writeGoogleCalendarPullSnapshot({
+      dateKey: normalizedDateKey,
+      calendarId: config.googleCalendar.calendarId,
+      startedAt,
+      completedAt,
+      windowStart: listed.timeMin,
+      windowEnd: listed.timeMax,
+      status: 'ok',
+      operation,
+      events
+    });
+
+    return {
+      enabled: true,
+      status: 'ok',
+      failed: false,
+      operation,
+      calendarId: config.googleCalendar.calendarId,
+      dateKey: normalizedDateKey,
+      events,
+      startedAt,
+      completedAt,
+      windowStart: listed.timeMin,
+      windowEnd: listed.timeMax,
+      fromCache: false
+    };
+  } catch (error) {
+    const completedAt = new Date().toISOString();
+    const { timeMin, timeMax } = getDateWindowForCalendarPull(normalizedDateKey);
+    console.error('[google-calendar-read] failed', {
+      dateKey: normalizedDateKey,
+      calendarId: config.googleCalendar.calendarId,
+      operation,
+      timeMin,
+      timeMax,
+      retryable: isRetryableGoogleError(error),
+      error: formatGoogleError(error),
+      response: error?.response?.data || null
+    });
+    await appendGoogleCalendarSyncFailure({
+      at: completedAt,
+      dateKey: normalizedDateKey,
+      calendarId: config.googleCalendar.calendarId,
+      operation: `calendar_read:${operation}`,
+      retryable: isRetryableGoogleError(error),
+      error: formatGoogleError(error)
+    });
+    await writeGoogleCalendarPullSnapshot({
+      dateKey: normalizedDateKey,
+      calendarId: config.googleCalendar.calendarId,
+      startedAt,
+      completedAt,
+      windowStart: timeMin,
+      windowEnd: timeMax,
+      status: 'failed',
+      operation,
+      error: formatGoogleError(error),
+      events: []
+    });
+
+    return {
+      enabled: true,
+      status: 'failed',
+      failed: true,
+      operation,
+      calendarId: config.googleCalendar.calendarId,
+      dateKey: normalizedDateKey,
+      events: [],
+      error: formatGoogleError(error),
+      retryable: isRetryableGoogleError(error),
+      startedAt,
+      completedAt,
+      windowStart: timeMin,
+      windowEnd: timeMax,
+      fromCache: false
+    };
+  }
+}
+
+function formatAgendaOperationPayload(agendaEvent, dateKey) {
+  try {
+    return toAgendaEventPayload({ agendaEvent, dateKey });
+  } catch {
+    return null;
+  }
+}
+
+export async function reconcileAgendaEventsForDate({
+  dateKey,
+  currentEvents,
+  nextEvents,
+  allowedNewEventIds = []
+}) {
+  const configError = googleCalendarConfigError();
+  if (configError) {
+    return {
+      enabled: false,
+      total: 0,
+      succeeded: 0,
+      failed: 0,
+      retryable: 0,
+      errors: []
+    };
+  }
+
+  const currentList = Array.isArray(currentEvents) ? currentEvents : [];
+  const nextList = Array.isArray(nextEvents) ? nextEvents : [];
+  const currentById = new Map(
+    currentList
+      .filter((event) => String(event?.eventId || '').trim())
+      .map((event) => [String(event.eventId || '').trim(), event])
+  );
+  const allowedNewIds = new Set((Array.isArray(allowedNewEventIds) ? allowedNewEventIds : []).map((id) => String(id || '').trim()));
+  const seenNextIds = new Set();
+  const operations = [];
+
+  for (const event of nextList) {
+    const eventId = String(event?.eventId || event?.id || '').trim();
+    if (!eventId || seenNextIds.has(eventId)) continue;
+    seenNextIds.add(eventId);
+
+    if (currentById.has(eventId)) {
+      operations.push({ type: 'update', eventId, agendaEvent: event });
+      continue;
+    }
+
+    if (!allowedNewIds.has(eventId)) {
+      operations.push({ type: 'invalid', eventId, agendaEvent: event, error: 'unknown new event id' });
+      continue;
+    }
+
+    operations.push({ type: 'create', eventId, agendaEvent: event });
+  }
+
+  for (const currentEvent of currentList) {
+    const eventId = String(currentEvent?.eventId || '').trim();
+    if (!eventId || seenNextIds.has(eventId)) continue;
+    operations.push({ type: 'delete', eventId, agendaEvent: currentEvent });
+  }
+
+  const summary = {
+    enabled: true,
+    total: operations.length,
+    succeeded: 0,
+    failed: 0,
+    retryable: 0,
+    errors: []
+  };
+
+  for (const operation of operations) {
+    try {
+      if (operation.type === 'invalid') {
+        throw new Error(operation.error || 'invalid operation');
+      }
+
+      if (operation.type === 'create') {
+        await createAgendaEvent({ agendaEvent: operation.agendaEvent, dateKey });
+        summary.succeeded += 1;
+        continue;
+      }
+
+      if (operation.type === 'update') {
+        await updateAgendaEvent({
+          eventId: operation.eventId,
+          agendaEvent: operation.agendaEvent,
+          dateKey
+        });
+        summary.succeeded += 1;
+        continue;
+      }
+
+      if (operation.type === 'delete') {
+        await deleteCalendarEvent(operation.eventId);
+        summary.succeeded += 1;
+      }
+    } catch (error) {
+      logGoogleCalendarSyncFailure({
+        dateKey,
+        localTaskId: '',
+        googleCalendarEventId: operation.eventId || '',
+        operation: `agenda_${operation.type}`,
+        payload: formatAgendaOperationPayload(operation.agendaEvent, dateKey),
+        error
+      });
+      await appendGoogleCalendarSyncFailure({
+        at: new Date().toISOString(),
+        dateKey,
+        googleCalendarEventId: operation.eventId || '',
+        calendarId: config.googleCalendar.calendarId,
+        operation: `agenda_${operation.type}`,
+        retryable: isRetryableGoogleError(error),
+        error: formatGoogleError(error)
       });
       summary.failed += 1;
       if (isRetryableGoogleError(error)) {

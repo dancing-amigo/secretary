@@ -48,10 +48,6 @@ export const config = {
     accessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || "",
     defaultUserId: process.env.LINE_DEFAULT_USER_ID || "",
   },
-  cron: {
-    morning: process.env.MORNING_PLAN_CRON || "0 8 * * *",
-    night: process.env.NIGHT_REVIEW_CRON || "0 22 * * *",
-  },
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
     baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
@@ -105,6 +101,7 @@ export const config = {
   },
   cloudTasks: {
     projectId:
+      process.env.CLOUD_TASKS_PROJECT_ID ||
       process.env.GOOGLE_CLOUD_PROJECT ||
       "",
     location: process.env.CLOUD_TASKS_LOCATION || "",

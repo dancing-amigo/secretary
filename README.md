@@ -2,12 +2,13 @@
 
 このアプリは次のことを行います。
 
-- バンクーバー時間の朝ウィンドウ `07:30-08:30` に `朝です` を1回だけ送信
-- バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
+- バンクーバー時間の毎朝 `08:00` に `朝です` を送信
+- バンクーバー時間の毎夜 `22:00` に当日サマリーを送信
 - LINE自由形式メッセージをLLMで判定し、当日予定の更新・一覧取得・その他応答を返す
 - 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
 - アプリが作成・更新する event の description 先頭には `status` と `notifyOnEnd` を書き込み、完了状態と終了通知設定を保持する
 - `modify_events` 後に Cloud Tasks で event ごとの開始通知と終了通知を再スケジュールする
+- Cloud Tasks で `morning` / `night` の日次ジョブも自己再スケジュールし、ローカル時刻 `08:00` / `22:00` に実行する
 - `notifyOnEnd: on` の event は、終了時点で未完了なら 15 分ごとに再通知し、22:00 以降は停止する
 - Google Drive の `conversations/YYYY-MM-DD.json` に、`APP_TIMEZONE` / `TZ` に従う `localAt` 付きの日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
@@ -26,8 +27,6 @@
 
 - `APP_TIMEZONE`（既定: `America/Vancouver`。`TZ` は後方互換のフォールバックとしてのみ参照）
 - `PORT`（既定: `8787`）
-- `MORNING_PLAN_CRON`（既定: `0 8 * * *`。ローカル常駐起動時のみ使用）
-- `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`。ローカル常駐起動時のみ使用）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
@@ -62,15 +61,14 @@ npm install
 npm run dev
 ```
 
-GitHub Actions から使う場合は `.github/workflows/secretary-cron-morning.yml` と
-`.github/workflows/secretary-cron-night.yml` が、PST 固定で朝 `07:35` / `08:05`、
-夜 `21:35` / `22:05` に対応する UTC 時刻だけ `/api/jobs/*` を叩きます。
-アプリ側では Google Drive 上の重複防止のみを行います。
+起動時にアプリは Cloud Tasks queue に次回の `morning` / `night` task を 1 本ずつ seed します。
+各ジョブが完了すると翌日同時刻の task を自動作成するため、GitHub Actions や `node-cron` は不要です。
+時刻は `APP_TIMEZONE` 基準で毎日 `08:00` と `22:00` 固定です。
 
 ## エンドポイント
 
 - `POST /webhook/line` LINE webhook
-- `POST /api/jobs/morning` 朝通知ジョブ（ローカル時刻 `07:30-08:30` の window 内で1回のみ送信）
-- `POST /api/jobs/night` 夜サマリージョブ（ローカル時刻 `21:30-22:30` の window 内で1回のみ送信）
+- `POST /api/jobs/morning` Cloud Tasks から叩かれる朝通知ジョブ
+- `POST /api/jobs/night` Cloud Tasks から叩かれる夜サマリージョブ
 - `POST /api/jobs/event-reminder-delivery` Cloud Tasks から叩かれる event 通知 delivery endpoint
 - `GET /health` ヘルスチェック

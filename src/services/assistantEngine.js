@@ -592,14 +592,6 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
   const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('night_review');
   const existing = await getNotificationRecord({ slot: 'night', dateKey });
-  if (existing?.sentAt) {
-    return {
-      text: '',
-      alreadySent: true,
-      reusedSummary: false,
-      logUpdated: Boolean(existing.logUpdatedAt)
-    };
-  }
 
   const previousSummary = await getLatestSentNotificationBefore({ slot: 'night', dateKey });
   const since = previousSummary?.sentAt || getUtcIsoForLocalDateTime({
@@ -659,7 +651,6 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
 
   return {
     text: summary.messageText || '今日のサマリーを作成できませんでした。',
-    alreadySent: false,
     reusedSummary: false,
     logUpdated: true
   };

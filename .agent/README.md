@@ -93,6 +93,11 @@
 - `notification-state.json` と `task-sync-state.json` の古い日付キー、および失敗ログを保存時に自動削除する
 - 保持期間は環境変数で上書き可能とし、既定値は 7 日にした
 
+### `STEP16.md`
+- `morning` / `night` の定時起動を GitHub Actions から Google Cloud Tasks へ移した
+- 毎日ローカル時刻 `08:00` と `22:00` に 1 回だけ Cloud Tasks で起動するようにした
+- 朝夜ジョブ向け window 重複防止ロジックを起動経路から外した
+
 ## 更新ルール
 
 - 新しいプランを `plans/` に追加したら、この README に項目と要約を追記する

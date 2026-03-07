@@ -1,13 +1,17 @@
-import cron from 'node-cron';
 import { config } from '../config.js';
 import { pushMessage } from './lineClient.js';
 import { prepareNightReview, runMorningPlan } from './assistantEngine.js';
 import {
   appendConversationTurn,
   completeNotificationWindow,
-  failNotificationWindow,
-  reserveNotificationWindow
+  failNotificationWindow
 } from './googleDriveState.js';
+import { cloudTasksConfigError, ensureDailyJobTask } from './cloudTasks.js';
+
+const DAILY_JOB_TIMES = {
+  morning: '08:00:00',
+  night: '22:00:00'
+};
 
 function getLocalDateTimeParts(timeZone, date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -48,46 +52,28 @@ async function sendToDefaultUser(text) {
   return { ok: true, userId, text };
 }
 
-async function runWindowedJob({ slot, textFactory }) {
-  const snapshot = getLocalScheduleContext(config.tz);
-  let reservation;
-  try {
-    reservation = await reserveNotificationWindow({
-      slot,
-      dateKey: snapshot.dateKey,
-      localTime: snapshot.localTime
-    });
-  } catch (error) {
-    return {
-      skipped: true,
-      reason: `notification dedupe unavailable: ${String(error.message || error)}`,
-      ...snapshot
-    };
-  }
+async function scheduleNextDailyJob(jobName, now = new Date()) {
+  const result = await ensureDailyJobTask({
+    jobName,
+    localTime: DAILY_JOB_TIMES[jobName],
+    timeZone: config.tz,
+    now
+  });
+  return result;
+}
 
-  if (!reservation.reserved) {
-    return { skipped: true, reason: reservation.reason, ...snapshot };
-  }
-
+async function runScheduledJob(jobName, runner) {
   try {
-    const text = await textFactory();
-    const out = await sendToDefaultUser(text);
-    await completeNotificationWindow({
-      slot,
-      dateKey: snapshot.dateKey,
-      localTime: snapshot.localTime
-    });
-    return { skipped: false, ...out, ...snapshot };
+    const result = await runner();
+    const next = await scheduleNextDailyJob(jobName, new Date(Date.now() + 1000));
+    return { ...result, nextScheduled: next };
   } catch (error) {
     try {
-      await failNotificationWindow({
-        slot,
-        dateKey: snapshot.dateKey,
-        localTime: snapshot.localTime,
-        error
+      await scheduleNextDailyJob(jobName, new Date(Date.now() + 1000));
+    } catch (scheduleError) {
+      console.error(`[scheduler] failed to reschedule ${jobName}`, {
+        error: String(scheduleError?.message || scheduleError)
       });
-    } catch {
-      // Keep the original send error as the primary failure.
     }
 
     throw error;
@@ -95,42 +81,33 @@ async function runWindowedJob({ slot, textFactory }) {
 }
 
 export async function runMorningJob() {
-  return runWindowedJob({
-    slot: 'morning',
-    textFactory: runMorningPlan
+  return runScheduledJob('morning', async () => {
+    const snapshot = getLocalScheduleContext(config.tz);
+    const text = await runMorningPlan();
+    const out = await sendToDefaultUser(text);
+    try {
+      await completeNotificationWindow({
+        slot: 'morning',
+        dateKey: snapshot.dateKey,
+        localTime: snapshot.localTime
+      });
+    } catch {}
+    return { skipped: false, ...out, ...snapshot };
   });
 }
 
 export async function runNightJob() {
-  const snapshot = getLocalScheduleContext(config.tz);
-  let reservation;
-  try {
-    reservation = await reserveNotificationWindow({
-      slot: 'night',
-      dateKey: snapshot.dateKey,
-      localTime: snapshot.localTime
-    });
-  } catch (error) {
-    return {
-      skipped: true,
-      reason: `notification dedupe unavailable: ${String(error.message || error)}`,
-      ...snapshot
-    };
-  }
+  return runScheduledJob('night', async () => {
+    const snapshot = getLocalScheduleContext(config.tz);
 
-  if (!reservation.reserved) {
-    return { skipped: true, reason: reservation.reason, ...snapshot };
-  }
+    try {
+      const review = await prepareNightReview({
+        userId: config.line.defaultUserId,
+        dateKey: snapshot.dateKey,
+        localTime: snapshot.localTime,
+        timeZone: config.tz
+      });
 
-  try {
-    const review = await prepareNightReview({
-      userId: config.line.defaultUserId,
-      dateKey: snapshot.dateKey,
-      localTime: snapshot.localTime,
-      timeZone: config.tz
-    });
-
-    if (!review.alreadySent) {
       const out = await sendToDefaultUser(review.text);
       const messageSentAt = new Date().toISOString();
       try {
@@ -142,45 +119,40 @@ export async function runNightJob() {
         });
       } catch {}
 
-      await completeNotificationWindow({
-        slot: 'night',
-        dateKey: snapshot.dateKey,
-        localTime: snapshot.localTime,
-        sentAt: messageSentAt
-      });
+      try {
+        await completeNotificationWindow({
+          slot: 'night',
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          sentAt: messageSentAt
+        });
+      } catch {}
 
       return { skipped: false, ...out, ...snapshot, ...review };
+    } catch (error) {
+      try {
+        await failNotificationWindow({
+          slot: 'night',
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          error
+        });
+      } catch {}
+
+      throw error;
     }
-
-    await completeNotificationWindow({
-      slot: 'night',
-      dateKey: snapshot.dateKey,
-      localTime: snapshot.localTime
-    });
-
-    return { skipped: true, reason: 'already sent', ...snapshot, ...review };
-  } catch (error) {
-    try {
-      await failNotificationWindow({
-        slot: 'night',
-        dateKey: snapshot.dateKey,
-        localTime: snapshot.localTime,
-        error
-      });
-    } catch {
-      // Keep the original send error as the primary failure.
-    }
-
-    throw error;
-  }
+  });
 }
 
-export function startSchedulers() {
-  cron.schedule(config.cron.morning, async () => {
-    await runMorningJob();
-  }, { timezone: config.tz });
+export async function startSchedulers() {
+  const configError = cloudTasksConfigError();
+  if (configError) {
+    console.warn(`[scheduler] cloud tasks disabled: ${configError}`);
+    return;
+  }
 
-  cron.schedule(config.cron.night, async () => {
-    await runNightJob();
-  }, { timezone: config.tz });
+  await Promise.all([
+    scheduleNextDailyJob('morning'),
+    scheduleNextDailyJob('night')
+  ]);
 }

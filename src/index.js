@@ -8,9 +8,17 @@ if (missing.length > 0) {
   console.warn(`Missing env vars: ${missing.join(', ')}`);
 }
 
-startSchedulers();
+async function main() {
+  await startSchedulers();
 
-app.listen(config.port, () => {
+  app.listen(config.port, () => {
+    // eslint-disable-next-line no-console
+    console.log(`line-secretary-mvp listening on :${config.port}`);
+  });
+}
+
+main().catch((error) => {
   // eslint-disable-next-line no-console
-  console.log(`line-secretary-mvp listening on :${config.port}`);
+  console.error('[startup] failed', error);
+  process.exit(1);
 });

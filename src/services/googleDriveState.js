@@ -5,7 +5,6 @@ import { config } from '../config.js';
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_DRIVE_API_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
-const PENDING_STALE_MS = 2 * 60 * 60 * 1000;
 const CONVERSATIONS_FOLDER_NAME = 'conversations';
 const LOG_FILE_NAME = 'log.md';
 
@@ -839,35 +838,6 @@ export async function readGoogleCalendarPullSnapshotForDate(dateKey) {
       .map((event) => normalizeGoogleCalendarPulledEvent(event))
       .filter(Boolean)
   };
-}
-
-export async function reserveNotificationWindow({ slot, dateKey, localTime, now = new Date() }) {
-  const state = await readNotificationState();
-  const key = notificationKey(slot, dateKey);
-  const existing = state.notifications[key];
-  const nowIso = now.toISOString();
-
-  if (existing?.status === 'sent') {
-    return { reserved: false, reason: 'already sent', record: existing };
-  }
-
-  if (existing?.status === 'pending') {
-    const reservedAt = Date.parse(existing.reservedAt || '');
-    if (Number.isFinite(reservedAt) && now.getTime() - reservedAt < PENDING_STALE_MS) {
-      return { reserved: false, reason: 'already pending', record: existing };
-    }
-  }
-
-  state.notifications[key] = {
-    slot,
-    dateKey,
-    localTime,
-    reservedAt: nowIso,
-    status: 'pending'
-  };
-  await writeNotificationState(state);
-
-  return { reserved: true, record: state.notifications[key] };
 }
 
 export async function appendConversationTurn({ userId, role, text, at = new Date().toISOString() }) {

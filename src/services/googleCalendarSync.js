@@ -144,11 +144,17 @@ function normalizeAgendaStatus(value) {
   return 'todo';
 }
 
+function normalizeNotifyOnEnd(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  return raw === 'on' || raw === 'true' || raw === 'yes';
+}
+
 function parseAgendaMetadata(description) {
   const raw = String(description || '').replace(/\r\n/g, '\n');
   if (!raw.trim()) {
     return {
       status: 'todo',
+      notifyOnEnd: false,
       detail: ''
     };
   }
@@ -165,7 +171,7 @@ function parseAgendaMetadata(description) {
       break;
     }
 
-    const match = line.match(/^(kind|status):\s*(.+)$/i);
+    const match = line.match(/^(status|notifyOnEnd):\s*(.+)$/i);
     if (!match) {
       break;
     }
@@ -176,18 +182,22 @@ function parseAgendaMetadata(description) {
   }
 
   const status = normalizeAgendaStatus(metadata.status);
+  const notifyOnEnd = normalizeNotifyOnEnd(metadata.notifyonend);
   const detail = metadataCount > 0 ? lines.slice(index).join('\n').trim() : raw.trim();
 
   return {
     status,
+    notifyOnEnd,
     detail
   };
 }
 
-export function buildAgendaDescription({ status = 'todo', detail = '' }) {
+export function buildAgendaDescription({ status = 'todo', notifyOnEnd = false, detail = '' }) {
   const normalizedStatus = normalizeAgendaStatus(status);
+  const normalizedNotifyOnEnd = normalizeNotifyOnEnd(notifyOnEnd) ? 'on' : 'off';
   const detailText = String(detail || '').trim();
-  return detailText ? `status: ${normalizedStatus}\n\n${detailText}` : `status: ${normalizedStatus}`;
+  const header = `status: ${normalizedStatus}\nnotifyOnEnd: ${normalizedNotifyOnEnd}`;
+  return detailText ? `${header}\n\n${detailText}` : header;
 }
 
 function toAgendaEvent(event) {
@@ -199,6 +209,7 @@ function toAgendaEvent(event) {
     eventId: String(event.id || '').trim(),
     title: String(event.summary || '').trim(),
     status: parsed.status,
+    notifyOnEnd: parsed.notifyOnEnd,
     detail: parsed.detail,
     allDay,
     startTime: allDay ? '' : extractTimePart(event.start?.dateTime),
@@ -222,6 +233,7 @@ function toAgendaEvent(event) {
 function toAgendaEventPayload({ agendaEvent, dateKey }) {
   const title = String(agendaEvent?.title || '').trim().slice(0, 1024);
   const status = normalizeAgendaStatus(agendaEvent?.status);
+  const notifyOnEnd = normalizeNotifyOnEnd(agendaEvent?.notifyOnEnd);
   const detail = String(agendaEvent?.detail || '').trim();
   const allDay = Boolean(agendaEvent?.allDay);
   const startTime = normalizeFullTimeString(agendaEvent?.startTime);
@@ -229,7 +241,7 @@ function toAgendaEventPayload({ agendaEvent, dateKey }) {
 
   const payload = {
     summary: title,
-    description: buildAgendaDescription({ status, detail }),
+    description: buildAgendaDescription({ status, notifyOnEnd, detail }),
     colorId: String(config.googleCalendar.eventColorId || '').trim() || undefined
   };
 
@@ -406,6 +418,31 @@ async function listCalendarEventsForDate({ dateKey }) {
     timeMin,
     timeMax
   };
+}
+
+export async function getGoogleCalendarEventById(eventId) {
+  const configError = googleCalendarConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedEventId = String(eventId || '').trim();
+  if (!normalizedEventId) {
+    return null;
+  }
+
+  try {
+    const response = await googleCalendarRequest({
+      method: 'get',
+      url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events/${encodeURIComponent(normalizedEventId)}`
+    });
+    return normalizePulledCalendarEvent(response.data);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function deleteCalendarEvent(googleCalendarEventId) {

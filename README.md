@@ -6,10 +6,12 @@
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
 - LINE自由形式メッセージをLLMで判定し、当日予定の更新・一覧取得・その他応答を返す
 - 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
-- アプリが作成・更新する event の description 先頭には `status` を書き込み、完了状態を保持する
+- アプリが作成・更新する event の description 先頭には `status` と `notifyOnEnd` を書き込み、完了状態と終了通知設定を保持する
+- `modify_events` 後に Cloud Tasks で event ごとの開始通知と終了通知を再スケジュールする
+- `notifyOnEnd: on` の event は、終了時点で未完了なら 15 分ごとに再通知し、22:00 以降は停止する
 - Google Drive の `conversations/YYYY-MM-DD.json` に、`APP_TIMEZONE` / `TZ` に従う `localAt` 付きの日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
-- Google Drive の `states/` 配下に通知状態と Calendar 同期状態の JSON を保存する
+- Google Drive の `states/` 配下に通知状態、event 予約状態、Calendar 同期状態の JSON を保存する
 
 アクション判定は、ユーザー入力に加えて処理直前に Google Calendar から取得した当日予定一覧を参照して行います。`modify_events` は Google Calendar event 一覧そのものを更新し、`list_events` はその一覧を返します。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、更新用 LLM は現在の当日予定一覧とユーザー指示をもとに、その日の最終 event 一覧を JSON で返します。プログラム側はその event 一覧を検証して Google Calendar に直接リコンシリエーションします。アプリが更新した event の description には `status: todo|done` を先頭に保存し、当日の全項目を単一の event モデルで扱います。Google Calendar の読取スナップショットと同期失敗ログは Google Drive 上の `states/task-sync-state.json` に保存され、夜サマリーも当日 Calendar event 一覧を元に生成します。
 
@@ -42,6 +44,12 @@
 - `GOOGLE_CALENDAR_EVENT_COLOR_ID`（既定: `1`）
 - `GOOGLE_CALENDAR_SYNC_STATE_FILE_NAME`（既定: `task-sync-state.json`）
 - `GOOGLE_CALENDAR_PULL_RETENTION_DAYS`（既定: `7`）
+- `APP_BASE_URL` または `SECRETARY_BASE_URL`（Cloud Tasks の delivery endpoint を組み立てるために必要）
+- `CLOUD_TASKS_PROJECT_ID` または `GOOGLE_CLOUD_PROJECT`
+- `CLOUD_TASKS_LOCATION`
+- `CLOUD_TASKS_QUEUE`
+- `GOOGLE_SERVICE_ACCOUNT_EMAIL`
+- `GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`
 
 補足:
 
@@ -64,4 +72,5 @@ GitHub Actions から使う場合は `.github/workflows/secretary-cron-morning.y
 - `POST /webhook/line` LINE webhook
 - `POST /api/jobs/morning` 朝通知ジョブ（ローカル時刻 `07:30-08:30` の window 内で1回のみ送信）
 - `POST /api/jobs/night` 夜サマリージョブ（ローカル時刻 `21:30-22:30` の window 内で1回のみ送信）
+- `POST /api/jobs/event-reminder-delivery` Cloud Tasks から叩かれる event 通知 delivery endpoint
 - `GET /health` ヘルスチェック

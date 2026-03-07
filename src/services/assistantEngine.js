@@ -8,6 +8,7 @@ import {
   upsertDailyLog
 } from './googleDriveState.js';
 import { pullGoogleCalendarEventsForDate, reconcileAgendaEventsForDate } from './googleCalendarSync.js';
+import { reconcileReminderSchedulesForDate } from './eventReminders.js';
 import { createStructuredOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
@@ -49,7 +50,7 @@ const AGENDA_REWRITE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'title', 'status', 'detail', 'allDay', 'startTime', 'endTime'],
+        required: ['id', 'title', 'status', 'notifyOnEnd', 'detail', 'allDay', 'startTime', 'endTime'],
         properties: {
           id: { type: 'string' },
           title: { type: 'string' },
@@ -57,6 +58,7 @@ const AGENDA_REWRITE_SCHEMA = {
             type: 'string',
             enum: ['todo', 'done']
           },
+          notifyOnEnd: { type: 'boolean' },
           detail: { type: 'string' },
           allDay: { type: 'boolean' },
           startTime: { type: 'string' },
@@ -195,7 +197,8 @@ function formatAgendaEventsForSummary(events) {
     .map((event) => {
       const detail = event.detail ? ` / ${event.detail}` : '';
       const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
-      return `- [${event.status}] ${timeText} ${event.title} (id: ${event.eventId})${detail}`;
+      const notifyText = event.notifyOnEnd ? ' / notifyOnEnd:on' : ' / notifyOnEnd:off';
+      return `- [${event.status}] ${timeText} ${event.title} (id: ${event.eventId})${detail}${notifyText}`;
     })
     .join('\n');
 }
@@ -209,7 +212,8 @@ function formatCalendarEvents(events) {
     .map((event) => {
       const timeText = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
       const detail = event.detail ? ` / ${event.detail}` : '';
-      return `- [${event.status}] ${timeText} ${event.title}${detail} / eventId: ${event.eventId}`;
+      const notifyText = event.notifyOnEnd ? 'notifyOnEnd:on' : 'notifyOnEnd:off';
+      return `- [${event.status}] ${timeText} ${event.title}${detail} / ${notifyText} / eventId: ${event.eventId}`;
     })
     .join('\n');
 }
@@ -242,7 +246,8 @@ function formatEventLine(event) {
   const timeText = event.allDay
     ? 'All day'
     : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
-  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}`;
+  const notifyText = event.notifyOnEnd ? ' | notifyOnEnd:on' : '';
+  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}${notifyText}`;
 }
 
 function formatNightSummaryMessage({ events, extraNotes }) {
@@ -318,7 +323,7 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaCo
     '- clarify のときは、確認したい内容を短い日本語で返す',
     '',
     '出力フォーマット:',
-    '{"outcome":"updated","events":[{"id":"...","title":"...","status":"todo|done","detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
+    '{"outcome":"updated","events":[{"id":"...","title":"...","status":"todo|done","notifyOnEnd":false,"detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
     '',
     'ルール:',
     '- 変更がない event も含めて、当日一覧の最終状態を events 配列へすべて返してください。',
@@ -326,6 +331,7 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaCo
     '- 新規 event を追加する場合は、下の新規 id 候補だけを使ってください。',
     '- title は短く、何の予定か分かる表現にしてください。',
     '- status は todo または done のどちらかにしてください。特に完了報告がなければ todo を使ってください。',
+    '- notifyOnEnd は、終了時刻後も未完了なら通知を続けたい event のときだけ true にしてください。通常は false です。',
     '- detail には補足、条件、場所、制約などを簡潔に要約してください。不要なら空文字にしてください。',
     '- allDay が true のとき startTime と endTime は空文字にしてください。',
     '- allDay が false のとき startTime と endTime は HH:MM:SS 形式にしてください。',
@@ -453,6 +459,7 @@ function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEvent
     seenIds.add(eventId);
 
     const status = normalizeAgendaEventStatus(rawEvent.status);
+    const notifyOnEnd = Boolean(rawEvent.notifyOnEnd);
     const title = String(rawEvent.title || '').trim().replace(/\s+/g, ' ').slice(0, 120);
     if (!title) {
       throw new Error('event title は必須です。');
@@ -475,6 +482,7 @@ function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEvent
       eventId,
       title,
       status,
+      notifyOnEnd,
       detail,
       allDay,
       startTime,
@@ -531,6 +539,24 @@ export async function processUserMessage({ userId, text }) {
       failed: calendarSyncResult.failed,
       retryable: calendarSyncResult.retryable
     };
+
+    try {
+      const latestCalendarSnapshot = await pullGoogleCalendarEventsForDate({
+        dateKey: dateContext.dateKey,
+        operation: 'event_reminder_reconcile'
+      });
+      if (!latestCalendarSnapshot.failed) {
+        await reconcileReminderSchedulesForDate({
+          dateKey: dateContext.dateKey,
+          events: latestCalendarSnapshot.events
+        });
+      }
+    } catch (error) {
+      console.error('[event-reminders] reconcile failed', {
+        dateKey: dateContext.dateKey,
+        error: String(error?.message || error)
+      });
+    }
 
     const baseMessage = String(rewriteResult.message || '').trim() || '今日の予定を更新しました。';
     if (!syncResult.enabled || syncResult.failed === 0) {

@@ -33,6 +33,12 @@ function normalizeRetentionDays(rawValue, fallback) {
 
 export const config = {
   port: Number(process.env.PORT || 8787),
+  app: {
+    baseUrl:
+      process.env.APP_BASE_URL ||
+      process.env.SECRETARY_BASE_URL ||
+      "",
+  },
   tz: normalizeTimeZone(
     process.env.APP_TIMEZONE || process.env.TZ,
     "America/Vancouver",
@@ -96,6 +102,16 @@ export const config = {
       process.env.GOOGLE_CALENDAR_PULL_RETENTION_DAYS,
       7,
     ),
+  },
+  cloudTasks: {
+    projectId:
+      process.env.GOOGLE_CLOUD_PROJECT ||
+      "",
+    location: process.env.CLOUD_TASKS_LOCATION || "",
+    queue: process.env.CLOUD_TASKS_QUEUE || "",
+    serviceAccountEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || "",
+    serviceAccountPrivateKey:
+      process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "",
   },
 };
 

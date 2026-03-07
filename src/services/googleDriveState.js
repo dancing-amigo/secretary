@@ -32,11 +32,15 @@ function notificationKey(slot, dateKey) {
 
 function normalizeState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
-    return { notifications: {} };
+    return { notifications: {}, eventSchedules: {} };
   }
 
   if (!state.notifications || typeof state.notifications !== 'object' || Array.isArray(state.notifications)) {
     state.notifications = {};
+  }
+
+  if (!state.eventSchedules || typeof state.eventSchedules !== 'object' || Array.isArray(state.eventSchedules)) {
+    state.eventSchedules = {};
   }
 
   return state;
@@ -86,6 +90,27 @@ function normalizeConversationTurn(turn) {
     role,
     text: text.slice(0, 5000),
     localAt: formatIsoOffsetInTimeZone(new Date(parsedTime), config.tz)
+  };
+}
+
+function normalizeEventScheduleRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+
+  const eventId = String(record.eventId || '').trim();
+  if (!eventId) return null;
+
+  return {
+    eventId,
+    startTaskName: String(record.startTaskName || '').trim(),
+    startScheduledAt: String(record.startScheduledAt || '').trim(),
+    endTaskName: String(record.endTaskName || '').trim(),
+    endScheduledAt: String(record.endScheduledAt || '').trim(),
+    endRepeatTaskName: String(record.endRepeatTaskName || '').trim(),
+    endRepeatScheduledAt: String(record.endRepeatScheduledAt || '').trim(),
+    notifyOnEnd: Boolean(record.notifyOnEnd),
+    status: String(record.status || '').trim(),
+    allDay: Boolean(record.allDay),
+    updatedAt: String(record.updatedAt || '').trim()
   };
 }
 
@@ -411,7 +436,7 @@ async function readNotificationState() {
 
   const fileId = await findStateFileId({
     name: config.googleDrive.notificationStateFileName,
-    initialContent: { notifications: {} },
+    initialContent: { notifications: {}, eventSchedules: {} },
     cacheKey: 'notification'
   });
   const text = (await readDriveTextFile(fileId)).trim();
@@ -427,12 +452,16 @@ async function readNotificationState() {
 async function writeNotificationState(state) {
   const fileId = await findStateFileId({
     name: config.googleDrive.notificationStateFileName,
-    initialContent: { notifications: {} },
+    initialContent: { notifications: {}, eventSchedules: {} },
     cacheKey: 'notification'
   });
   const normalizedState = normalizeState(state);
   normalizedState.notifications = pruneNotificationRecords(
     normalizedState.notifications,
+    config.googleDrive.notificationRetentionDays
+  );
+  normalizedState.eventSchedules = pruneEventSchedules(
+    normalizedState.eventSchedules,
     config.googleDrive.notificationRetentionDays
   );
   await writeDriveTextFile(fileId, JSON.stringify(normalizedState, null, 2), 'application/json');
@@ -514,14 +543,40 @@ function pruneNotificationRecords(notifications, retentionDays, timeZone = confi
   }
 
   return Object.fromEntries(
-    Object.entries(source).filter(([key]) => {
-      const recordDateKey = String(key || '').split(':').pop() || '';
+    Object.entries(source).filter(([key, record]) => {
+      const recordDateKey = String(record?.dateKey || '').trim() || String(key || '').split(':').pop() || '';
       if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDateKey)) {
         return true;
       }
 
       return recordDateKey >= cutoffDateKey;
     })
+  );
+}
+
+function pruneEventSchedules(eventSchedules, retentionDays, now = new Date()) {
+  const source = eventSchedules && typeof eventSchedules === 'object' && !Array.isArray(eventSchedules)
+    ? eventSchedules
+    : {};
+  const normalizedDays = Number(retentionDays);
+  if (!Number.isFinite(normalizedDays) || normalizedDays < 1) {
+    return Object.fromEntries(
+      Object.entries(source)
+        .map(([eventId, record]) => [eventId, normalizeEventScheduleRecord(record)])
+        .filter(([, record]) => Boolean(record))
+    );
+  }
+
+  const cutoffTime = now.getTime() - ((normalizedDays - 1) * 24 * 60 * 60 * 1000);
+  return Object.fromEntries(
+    Object.entries(source)
+      .map(([eventId, record]) => [eventId, normalizeEventScheduleRecord(record)])
+      .filter(([, record]) => {
+        if (!record) return false;
+        const updatedAt = Date.parse(record.updatedAt || '');
+        if (!Number.isFinite(updatedAt)) return true;
+        return updatedAt >= cutoffTime;
+      })
   );
 }
 
@@ -936,6 +991,73 @@ export async function updateNotificationRecord({ slot, dateKey, updates }) {
   };
   await writeNotificationState(state);
   return state.notifications[key];
+}
+
+export async function getEventScheduleRecord(eventId) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedEventId = String(eventId || '').trim();
+  if (!normalizedEventId) return null;
+
+  const state = await readNotificationState();
+  return normalizeEventScheduleRecord(state.eventSchedules[normalizedEventId]) || null;
+}
+
+export async function listEventScheduleRecords() {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const state = await readNotificationState();
+  return Object.values(state.eventSchedules)
+    .map((record) => normalizeEventScheduleRecord(record))
+    .filter(Boolean);
+}
+
+export async function upsertEventScheduleRecord(eventId, updates) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedEventId = String(eventId || '').trim();
+  if (!normalizedEventId) {
+    throw new Error('eventId is required');
+  }
+
+  const state = await readNotificationState();
+  const previous = normalizeEventScheduleRecord(state.eventSchedules[normalizedEventId]) || { eventId: normalizedEventId };
+  state.eventSchedules[normalizedEventId] = normalizeEventScheduleRecord({
+    ...previous,
+    ...updates,
+    eventId: normalizedEventId,
+    updatedAt: String(updates?.updatedAt || new Date().toISOString())
+  });
+  await writeNotificationState(state);
+  return state.eventSchedules[normalizedEventId];
+}
+
+export async function deleteEventScheduleRecord(eventId) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedEventId = String(eventId || '').trim();
+  if (!normalizedEventId) return false;
+
+  const state = await readNotificationState();
+  if (!state.eventSchedules[normalizedEventId]) {
+    return false;
+  }
+
+  delete state.eventSchedules[normalizedEventId];
+  await writeNotificationState(state);
+  return true;
 }
 
 export async function getLatestSentNotificationBefore({ slot, dateKey }) {

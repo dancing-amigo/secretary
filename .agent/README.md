@@ -16,16 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP7.md`
-- Cloud Tasks を使って時刻付き event の開始通知と終了通知を予約・取消する設計
-- `modify_events` を唯一の再スケジュール入口にし、`notifyOnEnd` metadata 付き event の終了通知を扱う
-- Google Calendar 手動変更は非スコープとし、delivery 時の再検証で誤通知を防ぐ
-
-### `STEP8.md`
-- `notifyOnEnd` 対象 event の終了後未完了状態に対し、15 分ごとに自己再スケジュールする再通知設計
-- 再通知は delivery 時に最新 event を確認し、未完了なら送信して次の 1 本だけを予約する
-- 完了、削除、`endTime` 変更、22:00 到達で再通知チェーンを停止する
-
 ### `STEP9.md`
 - 当日会話履歴を全 LLM 呼び出しへ共通注入する計画
 - 対象は ActionClassifier、TaskChangePlanner、NightSummaryGenerator
@@ -77,6 +67,16 @@
 - Step 5 で同期済みの Google Calendar event を `log.md` に記録する実装を追加した
 - 予定取得は既存同期処理を再利用し、責務を `log.md` 更新に限定した
 - 夜サマリーで予定と実績の関係を Calendar event ベースで参照できる前提を整えた
+
+### `STEP7.md`
+- Cloud Tasks を使って時刻付き event の開始通知と終了通知を予約・取消する実装を追加した
+- `notifyOnEnd: on|off` metadata を Calendar description に保存し、`modify_events` 後に event ごとの通知スケジュールを再計算する
+- delivery 時に最新 event と `scheduledAt` を再検証し、古い task が残っても誤通知しない構成にした
+
+### `STEP8.md`
+- `notifyOnEnd` 対象 event の終了後未完了状態に対し、15 分ごとに自己再スケジュールする再通知を実装した
+- 再通知は delivery 時に最新 event を確認し、未完了なら送信して次の 1 本だけを予約する
+- 完了、削除、`endTime` 変更、22:00 到達で再通知チェーンを停止する
 
 ### `STEP13.md`
 - Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した

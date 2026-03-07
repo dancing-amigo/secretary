@@ -31,6 +31,59 @@ function normalizeTimeParts(hour, minute) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
 }
 
+function getTimeZoneOffsetMinutes(timeZone, date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit'
+  }).formatToParts(date);
+  const rawOffset = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT';
+  const match = rawOffset.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) return 0;
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+  return sign * (hours * 60 + minutes);
+}
+
+function parseLocalDateParts(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new RangeError(`Invalid local date: ${dateKey}`);
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3])
+  };
+}
+
+function parseLocalTimeParts(time) {
+  const match = String(time || '').match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) {
+    throw new RangeError(`Invalid local time: ${time}`);
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (hour > 23 || minute > 59 || second > 59) {
+    throw new RangeError(`Invalid local time: ${time}`);
+  }
+
+  return { hour, minute, second };
+}
+
+export function getUtcIsoForCalendarLocalDateTime({ dateKey, time, timeZone = config.tz }) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const { hour, minute, second } = parseLocalTimeParts(time);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const offsetMinutes = getTimeZoneOffsetMinutes(timeZone, utcGuess);
+  return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000).toISOString();
+}
+
 export function extractTimeRange(text) {
   const raw = String(text || '').trim();
   if (!raw) return null;
@@ -56,20 +109,24 @@ export function extractTimeRange(text) {
   return null;
 }
 
-function toCalendarDateTime(dateKey, time) {
-  return `${String(dateKey).trim()}T${String(time).trim()}`;
-}
-
 function toCalendarEventPayload({ task, dateKey, timeRange }) {
   return {
     summary: String(task.title || '').trim().slice(0, 1024),
     description: String(task.detail || '').trim().slice(0, 8192) || undefined,
     start: {
-      dateTime: toCalendarDateTime(dateKey, timeRange.startTime),
+      dateTime: getUtcIsoForCalendarLocalDateTime({
+        dateKey,
+        time: timeRange.startTime,
+        timeZone: config.tz
+      }),
       timeZone: config.tz
     },
     end: {
-      dateTime: toCalendarDateTime(dateKey, timeRange.endTime),
+      dateTime: getUtcIsoForCalendarLocalDateTime({
+        dateKey,
+        time: timeRange.endTime,
+        timeZone: config.tz
+      }),
       timeZone: config.tz
     }
   };

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildGoogleCalendarSyncPlan,
-  extractTimeRange
+  extractTimeRange,
+  getUtcIsoForCalendarLocalDateTime
 } from './googleCalendarSync.js';
 
 test('extractTimeRange parses HH:MM range', () => {
@@ -17,6 +18,17 @@ test('extractTimeRange parses Japanese hour range', () => {
     startTime: '14:00:00',
     endTime: '18:00:00'
   });
+});
+
+test('getUtcIsoForCalendarLocalDateTime converts local time to RFC3339 UTC', () => {
+  assert.equal(
+    getUtcIsoForCalendarLocalDateTime({
+      dateKey: '2026-03-07',
+      time: '10:00:00',
+      timeZone: 'America/Vancouver'
+    }),
+    '2026-03-07T18:00:00.000Z'
+  );
 });
 
 test('buildGoogleCalendarSyncPlan creates event sync only for timed tasks', () => {

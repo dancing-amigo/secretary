@@ -1,104 +1,223 @@
-# Step 7: タスク時間枠リマインダー（開始通知・終了時未完了通知）
+# Step 7: Cloud Tasks ベースの時刻付き event 通知
 
 ## 目的
-各タスクに開始時刻と終了時刻を持たせ、作業開始タイミングと締切到達タイミングで適切なメッセージ通知を行う。
-これにより「やるべき時間に着手できること」と「締切時点の未完了を見逃さないこと」を実現する。
+アプリ上の `modify_events` を唯一の event 更新経路とし、Google Calendar event の開始時刻通知と終了時刻通知を Cloud Tasks で正確に予約・取消できるようにする。
 
-## 固定方針
-- Step 7の主責務は「時間指定eventへのリマインダー通知」
-- 通知対象はタスク単位で判定する
-- 開始時刻がある場合のみ開始通知を送る
-- 終了時刻がある場合のみ終了時の未完了チェックを行う
-- 終了時刻があり、かつその時点で完了済みの場合はメッセージを一切送らない
-- 時間情報がないタスクには通知を行わない
-- event更新（modify events）で時刻が変わった場合は、通知スケジュールを必ず更新する
-- 本ステップでは実装より先に仕様確定を優先する
+今回の前提は次のとおり。
 
-## 前提（Step 1〜6の継続）
-- 当日タスク/予定は Google Calendar event ベースで管理されている
-- タスクの完了/未完了状態を判定できるデータ構造がある
-- 通知メッセージをユーザーへ送る既存チャネル（アプリ内メッセージ等）が利用可能
+- event の追加、編集、削除はすべてアプリ上で行う
+- Google Calendar 上の手動追加、手動編集、手動削除は Step 7 の対象外とする
+- 通知時刻の精度要件は「1 分前後」
+- GitHub Actions や cron に通知精度を依存しない
 
-## 今回の成功条件
-- タスクに `startTime` があると、その時刻に「このタスクをやる時間です」通知が送られる
-- タスクに `endTime` があると、その時刻に未完了判定が実行される
-- `endTime` 時点で未完了なら「このタスクは完了していません」通知が送られる
-- `endTime` 時点ですでに完了済みなら未完了通知を含むメッセージは一切送られない
-- `startTime`/`endTime` が未設定のタスクは通知処理対象外になる
+## 仕様確定
 
-## 実装スコープ（Step 7）
-1. タスク項目の拡張
-- タスクごとに時間項目を追加する
-  - `startTime`（任意）
-  - `endTime`（任意）
-- 時刻の解釈は既存のタイムゾーン方針に統一する
+### 1. event モデル
+- task と予定は分離しない
+- すべて Google Calendar event として管理する
+- 開始時刻と終了時刻は event の `start` / `end` を使う
+- 終日 event は Step 7 の通知対象外
+- 時刻付き event は `allDay=false` かつ `startTime` / `endTime` を持つものとする
 
-2. 開始時刻リマインダー
-- `startTime` が設定されているタスクのみ対象
-- 指定時刻に開始通知を送る
-- 通知例:
-  - 「このタスクをやる時間になりました」
+### 2. 開始通知
+- 時刻付き event はすべて開始通知対象
+- 開始時刻に 1 回だけ送る
+- 開始通知に追加フラグは不要
 
-3. 終了時刻の未完了チェック
-- `endTime` が設定されているタスクのみ対象
-- 指定時刻に完了状態を確認する
-- 未完了の場合のみ通知を送る
-- 通知例:
-  - 「このタスクはまだ完了していません」
+### 3. 終了通知
+- 終了通知は `notifyOnEnd: on` の event だけ対象
+- 終了時刻時点で `status: todo` のときだけ送る
+- 終了時刻時点で `status: done` なら送らない
 
-4. 条件分岐ルール（重要）
-- `startTime` なし: 開始通知を送らない
-- `endTime` なし: 終了時未完了通知を送らない
-- `startTime` のみあり: 開始通知のみ実施
-- `endTime` のみあり: 終了時に未完了なら通知、完了済みなら無通知
-- `startTime`/`endTime` 両方あり: 両方実施
+### 4. metadata
+- 既存の `status: todo|done` は維持する
+- 終了通知用 metadata として `notifyOnEnd: on|off` を追加する
+- 既定値は `off`
 
-5. 重複通知防止
-- 同一タスク・同一通知種別（開始/未完了）で重複送信しない
-- ジョブ再実行時も二重送信が起きないようにする
+記述例:
 
-6. エラー処理・運用
-- 通知送信失敗時は記録し、他タスクの判定は継続する
-- 判定失敗時も全体停止しない
+```txt
+status: todo
+notifyOnEnd: on
 
-7. `modify events` による時刻変更への追従（重要）
-- `startTime` または `endTime` が変更された時点で、当該タスクの既存通知スケジュールを再計算する
-- 旧時刻向けに登録済みの未実行通知があればキャンセルし、新時刻で再登録する
-- 変更前時刻の通知がすでに送信済みの場合は、送信済み履歴を保持しつつ、未送信側のみ新時刻へ更新する
-- 例1（終了時刻変更）:
-  - 初期設定: `startTime=13:00`, `endTime=15:00`
-  - 13:00に開始通知送信済み、14:00に `endTime=16:00` へ変更
-  - 結果: 15:00の未完了通知は送らず、未完了なら16:00に送る
-- 例2（開始時刻変更）:
-  - 初期設定: `startTime=13:00`
-  - 13:00より前に `startTime=14:00` へ変更
-  - 結果: 13:00には送らず、14:00に開始通知を送る
+先方レビューまでに初稿を出す
+```
 
-## タスクデータの記述方針（Step 7）
-- 既存タスク形式を壊さず、必要最小限の項目を追加する
-- 記述イメージ:
-  - タスク本文
-  - 完了状態（既存）
-  - `startTime`（任意）
-  - `endTime`（任意）
+## 基本方針
 
-## 受け入れテスト（最小）
-1. `startTime=13:00`, `endTime=15:00` の未完了タスクで、13:00に開始通知、15:00に未完了通知が送られる
-2. 同条件のタスクを15:00より前に完了した場合、15:00の未完了通知は送られない
-3. `startTime` のみ設定タスクでは開始通知だけが送られる
-4. `endTime` のみ設定タスクでは終了時未完了通知だけが送られる
-5. 時間未設定タスクでは通知が送られない
-6. ジョブ再実行や再起動があっても同一通知が重複送信されない
-7. `endTime=15:00` のタスクを14:00に `endTime=16:00` へ変更した場合、15:00通知はキャンセルされ、未完了時のみ16:00に通知される
-8. `startTime=13:00` のタスクを13:00より前に `startTime=14:00` へ変更した場合、開始通知は14:00にのみ送られる
+### 1. `modify_events` を唯一のスケジューリング入口にする
+- event の追加時に Cloud Tasks を新規作成する
+- event の時刻変更、`notifyOnEnd` 変更、完了変更時に Cloud Tasks を再計算する
+- event の削除時に既存 Cloud Tasks を削除する
 
-## 非スコープ（Step 7時点）
-- 通知文面の高度なパーソナライズ
-- 複数回スヌーズ、再通知、エスカレーション
-- カレンダー自動登録や自動再スケジュール
-- 優先度や工数推定に応じた動的通知最適化
+### 2. Google Calendar 手動変更は無視する
+- Step 7 では Google Calendar を通知スケジューリングのトリガー source にしない
+- アプリ外で直接作られた event は通知対象外になりうる
+- アプリ外で直接編集された event に対して、既存予約が stale になる可能性は受け入れる
 
-## 完了後の期待効果
-- タスク着手のタイミングを逃しにくくなる
-- 締切時点の未完了を確実に把握できる
-- 時間付きタスク運用の精度が上がり、日次実行管理が安定する
+この制約は Step 7 の仕様として明示する。
+
+## 採用アーキテクチャ
+
+### 1. Cloud Tasks を one-off scheduler として使う
+- event ごとに開始通知 task と終了通知 task を必要に応じて作る
+- task には実行時刻を設定し、到達時にアプリの HTTP endpoint を叩かせる
+- 予約済み task は task name で管理する
+
+### 2. delivery 時に再検証する
+- Cloud Tasks の payload をそのまま信じて送信しない
+- 実行時に Google Calendar の最新 event を取得し、まだ通知すべきか確認する
+- これにより、以下を防ぐ
+  - 完了済みなのに終了通知する
+  - 削除済み event に通知する
+  - 時刻変更後の古い予約が残っていた場合に誤通知する
+
+## Cloud Tasks 設計
+
+### 1. task 種別
+- `start` 通知 task
+- `end` 通知 task
+
+### 2. task 名
+- task 名は再作成・削除しやすい決定的命名にする
+- 推奨:
+  - 開始通知: `event-{eventId}-start`
+  - 終了通知: `event-{eventId}-end`
+
+補足:
+- Cloud Tasks の task name は queue 内で一意
+- 同じ event の予約を張り替えるときは、旧 task を delete してから新 task を create する
+
+### 3. payload
+- `eventId`
+- `type` (`start` or `end`)
+- `scheduledAt`
+- `dateKey`
+
+payload は最小限でよい。実データの正本は常に Google Calendar にある。
+
+## state 設計
+
+Google Drive の通知 state とは別に、event ごとの予約状態を保持する。
+
+保持内容の例:
+
+```json
+{
+  "eventSchedules": {
+    "googleEventId123": {
+      "startTaskName": "projects/.../tasks/event-googleEventId123-start",
+      "startScheduledAt": "2026-03-07T13:00:00-08:00",
+      "endTaskName": "projects/.../tasks/event-googleEventId123-end",
+      "endScheduledAt": "2026-03-07T15:00:00-08:00",
+      "notifyOnEnd": true,
+      "status": "todo",
+      "allDay": false,
+      "updatedAt": "2026-03-07T12:00:00.000Z"
+    }
+  }
+}
+```
+
+用途:
+- 旧 task の delete 対象を知る
+- 変更時に差分比較する
+- 削除時に cleanup する
+
+## `modify_events` 時のリコンシリエーション
+
+### 1. 追加
+- 新規 event が時刻付きなら開始 task を create
+- `notifyOnEnd:on` なら終了 task も create
+- state に task 名と scheduledAt を保存
+
+### 2. 編集
+- 対象 event の旧 state を読む
+- 次のいずれかが変わったら再スケジュール対象
+  - `allDay`
+  - `startTime`
+  - `endTime`
+  - `status`
+  - `notifyOnEnd`
+- 旧 start task / old end task を必要に応じて delete
+- 新条件に応じて start task / end task を create
+- state を上書き
+
+### 3. 削除
+- 対象 event の start task / end task を delete
+- state から該当 event を削除
+
+### 4. 完了
+- `status` が `done` になったら終了通知 task は delete する
+- 開始通知 task が未来に残っているケースも安全側で delete してよい
+
+## delivery endpoint の動作
+
+### 1. endpoint
+- `POST /api/jobs/event-reminder-delivery`
+
+### 2. 実行時フロー
+1. Cloud Tasks から payload を受ける
+2. payload の `eventId` で Google Calendar の最新 event を取得する
+3. event が存在しなければ何も送らず成功終了する
+4. `type=start` のとき:
+- 時刻付き event か
+- 終日ではないか
+- 開始時刻が payload の `scheduledAt` と一致するか
+- すでに送信済みでないか
+5. `type=end` のとき:
+- 時刻付き event か
+- 終日ではないか
+- `notifyOnEnd:on` か
+- `status: todo` か
+- 終了時刻が payload の `scheduledAt` と一致するか
+- すでに送信済みでないか
+6. 条件を満たしたときだけ LINE push
+7. 送信後、通知 sent state を記録
+
+### 3. 冪等性
+- delivery は少なくとも 1 回以上で飛ぶ可能性を前提にする
+- 送信 dedupe は `eventId + type + scheduledAt` で管理する
+- 既送信なら何もせず成功終了する
+
+## キャンセル戦略
+
+### 1. 原則
+- 予約変更時は「古い task を delete -> 新しい task を create」の順
+
+### 2. delete 失敗時
+- 404 は「すでにない」とみなして続行
+- 一時失敗なら処理全体を失敗にしてよい
+- 中途半端な状態を避けるため、state 更新は Cloud Tasks 操作成功後に行う
+
+### 3. 誤配信防止の最後の砦
+- 仮に古い task が delete できずに残っても、delivery 時の `scheduledAt` 再検証で弾く
+
+## 受け入れ条件
+1. 時刻付き event 追加時、開始通知 task が作成される
+2. `notifyOnEnd:on` の event 追加時、終了通知 task も作成される
+3. `notifyOnEnd:off` の event 追加時、終了通知 task は作成されない
+4. event の開始時刻変更時、旧開始 task は削除され、新開始 task に張り替わる
+5. event の終了時刻変更時、旧終了 task は削除され、新終了 task に張り替わる
+6. `notifyOnEnd:on -> off` 変更時、終了 task は削除される
+7. event 削除時、開始 task / 終了 task が削除される
+8. `status: done` 変更時、終了通知は送られない
+9. delivery が重複実行されても同じ通知は 1 回しか送られない
+10. 古い task が残っても、最新 event と `scheduledAt` が不一致なら誤通知しない
+
+## 非スコープ
+- Google Calendar 上の手動変更追従
+- watch webhook
+- 定期 repair sync
+- 複数日跨ぎ event の精密サポート
+- 通知文面の高度な最適化
+
+## 実装順
+1. description metadata に `notifyOnEnd` を追加できるようにする
+2. Google Calendar event 単体取得 API を追加する
+3. Cloud Tasks client と create/delete wrapper を追加する
+4. event schedule state の read/write を追加する
+5. `modify_events` 後の差分から start/end task を reconcile する
+6. delivery endpoint を追加する
+7. sent dedupe を `eventId + type + scheduledAt` 単位で追加する
+8. テストを追加する

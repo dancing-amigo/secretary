@@ -75,15 +75,57 @@ function normalizeConversationTurn(turn) {
 
   const role = String(turn.role || '').trim();
   const text = String(turn.text || '').trim();
-  const at = String(turn.at || '').trim();
-  if (!role || !text || !at) return null;
+  const timestamp = String(turn.localAt || turn.at || '').trim();
+  if (!role || !text || !timestamp) return null;
   if (role !== 'user' && role !== 'assistant') return null;
+
+  const parsedTime = Date.parse(timestamp);
+  if (!Number.isFinite(parsedTime)) return null;
 
   return {
     role,
     text: text.slice(0, 5000),
-    at
+    localAt: formatIsoOffsetInTimeZone(new Date(parsedTime), config.tz)
   };
+}
+
+function getOffsetTextForTimeZone(date, timeZone = config.tz) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit'
+  }).formatToParts(date);
+  const rawOffset = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT';
+  if (rawOffset === 'GMT') {
+    return '+00:00';
+  }
+
+  const match = rawOffset.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) {
+    throw new RangeError(`Invalid GMT offset for timezone ${timeZone}: ${rawOffset}`);
+  }
+
+  const sign = match[1];
+  const hours = String(match[2] || '0').padStart(2, '0');
+  const minutes = String(match[3] || '0').padStart(2, '0');
+  return `${sign}${hours}:${minutes}`;
+}
+
+function formatIsoOffsetInTimeZone(date, timeZone = config.tz) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).formatToParts(date);
+
+  const get = (type) => parts.find((part) => part.type === type)?.value || '';
+  const offset = getOffsetTextForTimeZone(date, timeZone);
+  return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}${offset}`;
 }
 
 function escapeDriveQueryValue(value) {
@@ -700,13 +742,13 @@ export async function appendConversationTurn({ userId, role, text, at = new Date
     return null;
   }
 
-  const dateKey = getDateKeyInTimeZone(new Date(normalizedTurn.at), config.tz);
+  const dateKey = getDateKeyInTimeZone(new Date(normalizedTurn.localAt), config.tz);
   const state = await readConversationStateForDate(dateKey, { createIfMissing: true });
   const currentTurns = Array.isArray(state.conversations[normalizedUserId]) ? state.conversations[normalizedUserId] : [];
   state.conversations[normalizedUserId] = [...currentTurns, normalizedTurn]
     .map((turn) => normalizeConversationTurn(turn))
     .filter(Boolean)
-    .sort((a, b) => String(a.at).localeCompare(String(b.at)))
+    .sort((a, b) => String(a.localAt).localeCompare(String(b.localAt)))
     .slice(-500);
 
   state.date = dateKey;
@@ -744,7 +786,7 @@ export async function readConversationTurns({ userId, since, until }) {
     .map((turn) => normalizeConversationTurn(turn))
     .filter(Boolean)
     .filter((turn) => {
-      const turnTime = Date.parse(turn.at);
+      const turnTime = Date.parse(turn.localAt);
       if (!Number.isFinite(turnTime)) return false;
       return turnTime > sinceTime && turnTime < untilTime;
     });
@@ -763,7 +805,11 @@ function upsertDailyLogSection(currentContent, dateKey, entryMarkdown) {
     return `${current.replace(pattern, section.trimEnd())}\n`;
   }
 
-  return `${current}\n\n${section}`;
+  const normalized = current.startsWith('# Daily Log')
+    ? current.replace(/^# Daily Log\s*/, '# Daily Log\n\n')
+    : `# Daily Log\n\n${current}\n\n`;
+
+  return `${normalized}${section}`;
 }
 
 export async function upsertDailyLog({ dateKey, entryMarkdown }) {

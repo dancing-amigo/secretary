@@ -7,7 +7,7 @@
 - LINE自由形式メッセージをLLMで判定し、当日予定の更新・一覧取得・その他応答を返す
 - 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
 - アプリが作成・更新する event の description 先頭には `status` を書き込み、完了状態を保持する
-- Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
+- Google Drive の `conversations/YYYY-MM-DD.json` に、`APP_TIMEZONE` / `TZ` に従う `localAt` 付きの日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
 - Google Drive の `states/` 配下に通知状態と Calendar 同期状態の JSON を保存する
 

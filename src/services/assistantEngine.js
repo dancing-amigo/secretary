@@ -175,8 +175,15 @@ function formatConversationTurns(turns) {
   }
 
   return turns
-    .map((turn) => `- [${turn.at}] ${turn.role}: ${turn.text}`)
+    .map((turn) => `- [${formatConversationTimestamp(turn.localAt)}] ${turn.role}: ${turn.text}`)
     .join('\n');
+}
+
+function formatConversationTimestamp(value) {
+  const normalized = String(value || '').trim();
+  const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:[+-]\d{2}:\d{2}|Z)?$/);
+  if (!match) return normalized;
+  return `${match[1]} ${match[2]}`;
 }
 
 function formatAgendaEventsForSummary(events) {

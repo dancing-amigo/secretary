@@ -78,6 +78,11 @@
 - `task-sync-state.json` で `localTaskId` と `googleTaskId` の対応関係、および同期失敗ログを保持する構成にした
 - 同期失敗時もローカル更新を優先し、LINE 返信には必要時のみ「一部再試行予定 / 一部失敗」を補足する
 
+### `STEP13.md`
+- Google Tasks に当日日付を `due` として設定し、`No date` にならないようにした
+- `14:00〜18:00` などの時刻レンジがあるタスクは Google Calendar イベントとしても同期するようにした
+- 同期 state を `googleCalendarEventId` / `calendarId` まで拡張し、タスク削除や時刻削除時にイベントも追従させるようにした
+
 ## 更新ルール
 
 - 新しいプランを `plans/` に追加したら、この README に項目と要約を追記する

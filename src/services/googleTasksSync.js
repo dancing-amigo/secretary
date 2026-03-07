@@ -27,11 +27,21 @@ function sanitizeTaskText(value, maxLength) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
 }
 
-function toGoogleTaskPayload(task) {
+function buildDueDateTime(dateKey) {
+  const normalizedDateKey = String(dateKey || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDateKey)) {
+    return undefined;
+  }
+
+  return `${normalizedDateKey}T00:00:00.000Z`;
+}
+
+function toGoogleTaskPayload(task, dateKey) {
   const payload = {
     title: sanitizeTaskText(task.title, 1024),
     notes: sanitizeTaskText(task.detail, 8192) || undefined,
-    status: task.status === 'done' ? 'completed' : 'needsAction'
+    status: task.status === 'done' ? 'completed' : 'needsAction',
+    due: buildDueDateTime(dateKey)
   };
 
   if (payload.status === 'completed') {
@@ -151,24 +161,24 @@ function formatGoogleError(error) {
   return status ? `${status} ${message}` : message;
 }
 
-async function createGoogleTask(task) {
+async function createGoogleTask(task, dateKey) {
   const response = await googleTasksRequest({
     method: 'post',
     url: `${GOOGLE_TASKS_API_URL}/lists/${encodeURIComponent(config.googleTasks.taskListId)}/tasks`,
-    data: toGoogleTaskPayload(task)
+    data: toGoogleTaskPayload(task, dateKey)
   });
 
   return response.data;
 }
 
-async function updateGoogleTask({ googleTaskId, task }) {
+async function updateGoogleTask({ googleTaskId, task, dateKey }) {
   const response = await googleTasksRequest({
     method: 'patch',
     url: `${GOOGLE_TASKS_API_URL}/lists/${encodeURIComponent(config.googleTasks.taskListId)}/tasks/${encodeURIComponent(googleTaskId)}`,
     params: {
       fields: 'id,title,notes,status,completed'
     },
-    data: toGoogleTaskPayload(task)
+    data: toGoogleTaskPayload(task, dateKey)
   });
 
   return response.data;
@@ -235,7 +245,7 @@ export async function syncGoogleTasksForDate({ dateKey, localTasks }) {
   for (const operation of operations) {
     try {
       if (operation.type === 'create') {
-        const created = await createGoogleTask(operation.task);
+        const created = await createGoogleTask(operation.task, dateKey);
         await upsertGoogleTaskSyncMapping({
           localTaskId: operation.localTaskId,
           googleTaskId: String(created?.id || '').trim(),
@@ -251,7 +261,8 @@ export async function syncGoogleTasksForDate({ dateKey, localTasks }) {
         try {
           await updateGoogleTask({
             googleTaskId: operation.mapping.googleTaskId,
-            task: operation.task
+            task: operation.task,
+            dateKey
           });
           await upsertGoogleTaskSyncMapping({
             localTaskId: operation.localTaskId,
@@ -266,7 +277,7 @@ export async function syncGoogleTasksForDate({ dateKey, localTasks }) {
             throw error;
           }
 
-          const created = await createGoogleTask(operation.task);
+          const created = await createGoogleTask(operation.task, dateKey);
           await upsertGoogleTaskSyncMapping({
             localTaskId: operation.localTaskId,
             googleTaskId: String(created?.id || '').trim(),

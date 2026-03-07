@@ -77,6 +77,15 @@ export const config = {
     syncStateFileName:
       process.env.GOOGLE_TASKS_SYNC_STATE_FILE_NAME || "task-sync-state.json",
   },
+  googleCalendar: {
+    enabled:
+      String(
+        process.env.GOOGLE_CALENDAR_ENABLED ??
+          process.env.GOOGLE_TASKS_ENABLED ??
+          String(process.env.GOOGLE_DRIVE_ENABLED || "false"),
+      ).toLowerCase() === "true",
+    calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
+  },
 };
 
 export function assertMinimalConfig() {

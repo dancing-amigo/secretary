@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP6.md`
-- Step 5 で同期済みの Google Calendar event を `log.md` に記録する計画
-- 予定取得そのものは持たず、`log.md` 更新責務に限定する
-- 夜サマリーに Calendar event ベースの進捗と予定の関係を反映する前提
-
 ### `STEP7.md`
 - Calendar event ごとの `startTime` / `endTime` に基づく通知仕様の計画
 - 開始通知と、終了時点で未完了なら送る通知を定義
@@ -77,6 +72,11 @@
 - LINE受信時、朝通知前、夜サマリー前に当日 Google Calendar event を読取同期する実装を追加した
 - 取得した予定を `task-sync-state.json` に日付単位スナップショットとして保存し、同期失敗時も処理継続する構成にした
 - ActionClassifier と task 更新 LLM に当日予定一覧を注入し、手動追加・編集された予定も判断材料に含めるようにした
+
+### `STEP6.md`
+- Step 5 で同期済みの Google Calendar event を `log.md` に記録する実装を追加した
+- 予定取得は既存同期処理を再利用し、責務を `log.md` 更新に限定した
+- 夜サマリーで予定と実績の関係を Calendar event ベースで参照できる前提を整えた
 
 ### `STEP13.md`
 - Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した

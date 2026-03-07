@@ -11,7 +11,6 @@ import {
   upsertDailyLog
 } from './googleDriveState.js';
 import { syncGoogleCalendarForDate } from './googleCalendarSync.js';
-import { syncGoogleTasksForDate } from './googleTasksSync.js';
 import { createStructuredOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
@@ -434,18 +433,14 @@ export async function processUserMessage({ userId, text }) {
       currentUserId: userId
     });
 
-    const tasksSyncResult = await syncGoogleTasksForDate({
-      dateKey: dateContext.dateKey,
-      localTasks: nextTasks
-    });
     const calendarSyncResult = await syncGoogleCalendarForDate({
       dateKey: dateContext.dateKey,
       localTasks: nextTasks
     });
     const syncResult = {
-      enabled: tasksSyncResult.enabled || calendarSyncResult.enabled,
-      failed: tasksSyncResult.failed + calendarSyncResult.failed,
-      retryable: tasksSyncResult.retryable + calendarSyncResult.retryable
+      enabled: calendarSyncResult.enabled,
+      failed: calendarSyncResult.failed,
+      retryable: calendarSyncResult.retryable
     };
 
     const baseMessage = String(rewriteResult.message || '').trim() || '今日のタスクを更新しました。';

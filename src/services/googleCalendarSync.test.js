@@ -31,16 +31,17 @@ test('getCalendarRfc3339ForLocalDateTime converts local time to RFC3339 with off
   );
 });
 
-test('buildGoogleCalendarSyncPlan creates event sync only for timed tasks', () => {
+test('buildGoogleCalendarSyncPlan creates timed and all-day events, and deletes done tasks', () => {
   const plan = buildGoogleCalendarSyncPlan({
     dateKey: '2026-03-07',
     localTasks: [
       { id: 'task-a', title: 'Singular Radio撮影', detail: '14:00〜18:00', status: 'todo' },
-      { id: 'task-b', title: 'Laplace Shorts', detail: '', status: 'todo' }
+      { id: 'task-b', title: 'Laplace Shorts', detail: '', status: 'todo' },
+      { id: 'task-c', title: 'Done task', detail: '', status: 'done' }
     ],
     mappings: [
       {
-        localTaskId: 'task-b',
+        localTaskId: 'task-c',
         googleCalendarEventId: 'event-b',
         calendarId: 'primary',
         dateKey: '2026-03-07'
@@ -52,7 +53,8 @@ test('buildGoogleCalendarSyncPlan creates event sync only for timed tasks', () =
     plan.map((item) => ({ type: item.type, localTaskId: item.localTaskId })),
     [
       { type: 'create', localTaskId: 'task-a' },
-      { type: 'delete', localTaskId: 'task-b' }
+      { type: 'create', localTaskId: 'task-b' },
+      { type: 'delete', localTaskId: 'task-c' }
     ]
   );
 });

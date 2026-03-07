@@ -81,10 +81,10 @@ export const config = {
     enabled:
       String(
         process.env.GOOGLE_CALENDAR_ENABLED ??
-          process.env.GOOGLE_TASKS_ENABLED ??
           String(process.env.GOOGLE_DRIVE_ENABLED || "false"),
       ).toLowerCase() === "true",
     calendarId: process.env.GOOGLE_CALENDAR_ID || "primary",
+    eventColorId: process.env.GOOGLE_CALENDAR_EVENT_COLOR_ID || "1",
   },
 };
 

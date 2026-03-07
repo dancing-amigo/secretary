@@ -118,9 +118,31 @@ export function extractTimeRange(text) {
 }
 
 function toCalendarEventPayload({ task, dateKey, timeRange }) {
-  return {
+  const base = {
     summary: String(task.title || '').trim().slice(0, 1024),
     description: String(task.detail || '').trim().slice(0, 8192) || undefined,
+    colorId: String(config.googleCalendar.eventColorId || '').trim() || undefined
+  };
+
+  if (!timeRange) {
+    const { year, month, day } = parseLocalDateParts(dateKey);
+    const nextDate = new Date(Date.UTC(year, month - 1, day));
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+    const nextDateKey = nextDate.toISOString().slice(0, 10);
+
+    return {
+      ...base,
+      start: {
+        date: String(dateKey).trim()
+      },
+      end: {
+        date: nextDateKey
+      }
+    };
+  }
+
+  return {
+    ...base,
     start: {
       dateTime: getCalendarRfc3339ForLocalDateTime({
         dateKey,
@@ -158,7 +180,8 @@ export function buildGoogleCalendarSyncPlan({ dateKey, localTasks, mappings }) {
 
     const timeRange = extractTimeRange(task.detail) || extractTimeRange(task.title);
     const mapping = mappingByLocalId.get(localTaskId);
-    if (!timeRange) {
+
+    if (task.status === 'done') {
       if (mapping?.googleCalendarEventId) {
         operations.push({ type: 'delete', localTaskId, mapping });
       }

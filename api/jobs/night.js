@@ -3,6 +3,6 @@ import { requireCronAuth } from '../_lib/cronAuth.js';
 
 export default async function handler(req, res) {
   if (!requireCronAuth(req, res)) return;
-  const out = await runNightJob({ enforceWindow: true });
+  const out = await runNightJob();
   res.status(200).json({ ok: true, ...out });
 }

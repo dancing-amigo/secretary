@@ -22,8 +22,8 @@
 
 - `TZ`（既定: `America/Vancouver`）
 - `PORT`（既定: `8787`）
-- `MORNING_PLAN_CRON`（既定: `0 8 * * *`）
-- `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`。実際の送信はアプリ側の夜ウィンドウ `21:30-22:30` 判定で1回に制御）
+- `MORNING_PLAN_CRON`（既定: `0 8 * * *`。ローカル常駐起動時のみ使用）
+- `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`。ローカル常駐起動時のみ使用）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
@@ -44,7 +44,7 @@ npm run dev
 GitHub Actions から使う場合は `.github/workflows/secretary-cron-morning.yml` と
 `.github/workflows/secretary-cron-night.yml` が、PST 固定の朝ウィンドウ `07:30-08:30` と
 夜ウィンドウ `21:30-22:30` に対応する UTC 時刻だけ 15 分ごとに `/api/jobs/*` を叩きます。
-アプリ側では引き続き window 判定と Google Drive 上の重複防止を行います。
+アプリ側では Google Drive 上の重複防止のみを行います。
 
 ## エンドポイント
 

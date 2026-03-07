@@ -9,19 +9,6 @@ import {
   reserveNotificationWindow
 } from './googleDriveState.js';
 
-const NOTIFICATION_WINDOWS = {
-  morning: {
-    startMinutes: 7 * 60 + 30,
-    endMinutes: 8 * 60 + 30,
-    label: '07:30-08:30 local time'
-  },
-  night: {
-    startMinutes: 21 * 60 + 30,
-    endMinutes: 22 * 60 + 30,
-    label: '21:30-22:30 local time'
-  }
-};
-
 function getLocalDateTimeParts(timeZone, date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -43,15 +30,11 @@ function getLocalDateTimeParts(timeZone, date = new Date()) {
   };
 }
 
-function getLocalScheduleSnapshot(slot, timeZone, date = new Date()) {
-  const window = NOTIFICATION_WINDOWS[slot];
+function getLocalScheduleContext(timeZone, date = new Date()) {
   const parts = getLocalDateTimeParts(timeZone, date);
-  const totalMinutes = parts.hour * 60 + parts.minute;
   return {
     dateKey: `${parts.year}-${parts.month}-${parts.day}`,
-    localTime: `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
-    withinWindow: totalMinutes >= window.startMinutes && totalMinutes <= window.endMinutes,
-    windowLabel: window.label
+    localTime: `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`
   };
 }
 
@@ -65,12 +48,8 @@ async function sendToDefaultUser(text) {
   return { ok: true, userId, text };
 }
 
-async function runWindowedJob({ slot, textFactory, enforceWindow = false }) {
-  const snapshot = getLocalScheduleSnapshot(slot, config.tz);
-  if (enforceWindow && !snapshot.withinWindow) {
-    return { skipped: true, reason: `outside ${snapshot.windowLabel}`, ...snapshot };
-  }
-
+async function runWindowedJob({ slot, textFactory }) {
+  const snapshot = getLocalScheduleContext(config.tz);
   let reservation;
   try {
     reservation = await reserveNotificationWindow({
@@ -115,20 +94,15 @@ async function runWindowedJob({ slot, textFactory, enforceWindow = false }) {
   }
 }
 
-export async function runMorningJob({ enforceWindow = false } = {}) {
+export async function runMorningJob() {
   return runWindowedJob({
     slot: 'morning',
-    textFactory: runMorningPlan,
-    enforceWindow
+    textFactory: runMorningPlan
   });
 }
 
-export async function runNightJob({ enforceWindow = false } = {}) {
-  const snapshot = getLocalScheduleSnapshot('night', config.tz);
-  if (enforceWindow && !snapshot.withinWindow) {
-    return { skipped: true, reason: `outside ${snapshot.windowLabel}`, ...snapshot };
-  }
-
+export async function runNightJob() {
+  const snapshot = getLocalScheduleContext(config.tz);
   let reservation;
   try {
     reservation = await reserveNotificationWindow({

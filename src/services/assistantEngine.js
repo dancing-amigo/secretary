@@ -433,12 +433,27 @@ function formatAgendaList(events) {
   }
 
   const lines = ['今日の予定です。'];
-  for (const [index, event] of events.entries()) {
-    const prefix = event.allDay ? '終日' : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
-    lines.push(`${index + 1}. [${event.status}] ${prefix} ${event.title}`);
+  for (const event of events) {
+    const prefix = event.allDay
+      ? '終日'
+      : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
+    lines.push(`${prefix} [${event.status}]`);
+    lines.push(event.title);
+    lines.push('');
+  }
+
+  if (lines[lines.length - 1] === '') {
+    lines.pop();
   }
 
   return lines.join('\n');
+}
+
+function formatAgendaTimeForDisplay(value) {
+  const normalized = String(value || '').trim();
+  const match = normalized.match(/^(\d{2}):(\d{2})(?::\d{2})?$/);
+  if (!match) return normalized;
+  return `${match[1]}:${match[2]}`;
 }
 
 function normalizeFullTimeString(value) {

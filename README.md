@@ -42,8 +42,8 @@ npm run dev
 ```
 
 GitHub Actions から使う場合は `.github/workflows/secretary-cron-morning.yml` と
-`.github/workflows/secretary-cron-night.yml` が、PST 固定の朝ウィンドウ `07:30-08:30` と
-夜ウィンドウ `21:30-22:30` に対応する UTC 時刻だけ 15 分ごとに `/api/jobs/*` を叩きます。
+`.github/workflows/secretary-cron-night.yml` が、PST 固定で朝 `07:35` / `08:05`、
+夜 `21:35` / `22:05` に対応する UTC 時刻だけ `/api/jobs/*` を叩きます。
 アプリ側では Google Drive 上の重複防止のみを行います。
 
 ## エンドポイント

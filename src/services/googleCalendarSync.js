@@ -47,6 +47,14 @@ function getTimeZoneOffsetMinutes(timeZone, date) {
   return sign * (hours * 60 + minutes);
 }
 
+function formatOffset(minutes) {
+  const sign = minutes < 0 ? '-' : '+';
+  const absoluteMinutes = Math.abs(minutes);
+  const hours = Math.floor(absoluteMinutes / 60);
+  const remainder = absoluteMinutes % 60;
+  return `${sign}${String(hours).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`;
+}
+
 function parseLocalDateParts(dateKey) {
   const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) {
@@ -76,12 +84,12 @@ function parseLocalTimeParts(time) {
   return { hour, minute, second };
 }
 
-export function getUtcIsoForCalendarLocalDateTime({ dateKey, time, timeZone = config.tz }) {
+export function getCalendarRfc3339ForLocalDateTime({ dateKey, time, timeZone = config.tz }) {
   const { year, month, day } = parseLocalDateParts(dateKey);
   const { hour, minute, second } = parseLocalTimeParts(time);
   const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
   const offsetMinutes = getTimeZoneOffsetMinutes(timeZone, utcGuess);
-  return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000).toISOString();
+  return `${dateKey}T${String(time).trim()}${formatOffset(offsetMinutes)}`;
 }
 
 export function extractTimeRange(text) {
@@ -114,7 +122,7 @@ function toCalendarEventPayload({ task, dateKey, timeRange }) {
     summary: String(task.title || '').trim().slice(0, 1024),
     description: String(task.detail || '').trim().slice(0, 8192) || undefined,
     start: {
-      dateTime: getUtcIsoForCalendarLocalDateTime({
+      dateTime: getCalendarRfc3339ForLocalDateTime({
         dateKey,
         time: timeRange.startTime,
         timeZone: config.tz
@@ -122,7 +130,7 @@ function toCalendarEventPayload({ task, dateKey, timeRange }) {
       timeZone: config.tz
     },
     end: {
-      dateTime: getUtcIsoForCalendarLocalDateTime({
+      dateTime: getCalendarRfc3339ForLocalDateTime({
         dateKey,
         time: timeRange.endTime,
         timeZone: config.tz
@@ -238,33 +246,37 @@ function formatGoogleError(error) {
   return status ? `${status} ${message}` : message;
 }
 
-function logGoogleCalendarSyncFailure({ dateKey, localTaskId, googleCalendarEventId, operation, error }) {
+function logGoogleCalendarSyncFailure({ dateKey, localTaskId, googleCalendarEventId, operation, payload, error }) {
   console.error('[google-calendar-sync] failed', {
     dateKey,
     localTaskId,
     googleCalendarEventId,
     calendarId: config.googleCalendar.calendarId,
     operation,
+    payload,
     retryable: isRetryableGoogleError(error),
-    error: formatGoogleError(error)
+    error: formatGoogleError(error),
+    response: error?.response?.data || null
   });
 }
 
 async function createCalendarEvent({ task, dateKey, timeRange }) {
+  const payload = toCalendarEventPayload({ task, dateKey, timeRange });
   const response = await googleCalendarRequest({
     method: 'post',
     url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events`,
-    data: toCalendarEventPayload({ task, dateKey, timeRange })
+    data: payload
   });
 
   return response.data;
 }
 
 async function updateCalendarEvent({ googleCalendarEventId, task, dateKey, timeRange }) {
+  const payload = toCalendarEventPayload({ task, dateKey, timeRange });
   const response = await googleCalendarRequest({
     method: 'patch',
     url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events/${encodeURIComponent(googleCalendarEventId)}`,
-    data: toCalendarEventPayload({ task, dateKey, timeRange })
+    data: payload
   });
 
   return response.data;
@@ -381,6 +393,13 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
         localTaskId: operation.localTaskId,
         googleCalendarEventId: operation.mapping?.googleCalendarEventId || '',
         operation: `calendar_${operation.type}`,
+        payload: operation.task && operation.timeRange
+          ? toCalendarEventPayload({
+              task: operation.task,
+              dateKey,
+              timeRange: operation.timeRange
+            })
+          : null,
         error
       });
       await recordFailure({

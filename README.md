@@ -41,8 +41,10 @@ npm install
 npm run dev
 ```
 
-GitHub Actions から使う場合は `.github/workflows/secretary-cron.yml` が 15 分ごとに `/api/jobs/*` を叩き、
-アプリ側でバンクーバー時間の送信 window 判定と Google Drive 上の重複防止を行います。
+GitHub Actions から使う場合は `.github/workflows/secretary-cron-morning.yml` と
+`.github/workflows/secretary-cron-night.yml` が、PST 固定の朝ウィンドウ `07:30-08:30` と
+夜ウィンドウ `21:30-22:30` に対応する UTC 時刻だけ 15 分ごとに `/api/jobs/*` を叩きます。
+アプリ側では引き続き window 判定と Google Drive 上の重複防止を行います。
 
 ## エンドポイント
 

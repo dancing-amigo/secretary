@@ -67,6 +67,16 @@ export const config = {
       process.env.GOOGLE_OAUTH_REDIRECT_URI ||
       "http://127.0.0.1:53682/oauth2callback",
   },
+  googleTasks: {
+    enabled:
+      String(
+        process.env.GOOGLE_TASKS_ENABLED ??
+          String(process.env.GOOGLE_DRIVE_ENABLED || "false"),
+      ).toLowerCase() === "true",
+    taskListId: process.env.GOOGLE_TASKS_TASKLIST_ID || "@default",
+    syncStateFileName:
+      process.env.GOOGLE_TASKS_SYNC_STATE_FILE_NAME || "task-sync-state.json",
+  },
 };
 
 export function assertMinimalConfig() {

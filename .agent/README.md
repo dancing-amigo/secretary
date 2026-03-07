@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP4.md`
-- `modify_tasks` の結果を Google Tasks へ順方向同期する計画
-- 追加、編集、削除、完了を Google 側にも反映し、ローカルと外部表示のズレを減らす
-- `localTaskId` と `googleTaskId` のマッピング維持が前提
-
 ### `STEP5.md`
 - Google Tasks 側の追加、完了、削除だけをローカルへ逆同期する最小構成の計画
 - 競合時はアプリ側優先
@@ -77,6 +72,11 @@
 - 夜ウィンドウ `21:30-22:30` で、会話履歴と当日タスクを元にした日次サマリーを1回だけ生成・送信する実装を追加した
 - `notifications` は単一 JSON に集約し、`summaryGeneratedAt` / `logUpdatedAt` / `sentAt` を保持する構成に整理した
 - 会話履歴は `conversations/YYYY-MM-DD.json` に日単位で蓄積し、Google Drive 直下の `log.md` は日次セクション単位で更新するようにした
+
+### `STEP4.md`
+- `modify_tasks` 後に当日タスク全体を Google Tasks へリコンシリエーションする実装を追加した
+- `task-sync-state.json` で `localTaskId` と `googleTaskId` の対応関係、および同期失敗ログを保持する構成にした
+- 同期失敗時もローカル更新を優先し、LINE 返信には必要時のみ「一部再試行予定 / 一部失敗」を補足する
 
 ## 更新ルール
 

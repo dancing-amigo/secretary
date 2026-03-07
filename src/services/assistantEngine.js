@@ -10,6 +10,7 @@ import {
   updateNotificationRecord,
   upsertDailyLog
 } from './googleDriveState.js';
+import { syncGoogleTasksForDate } from './googleTasksSync.js';
 import { createStructuredOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
@@ -425,14 +426,28 @@ export async function processUserMessage({ userId, text }) {
       return String(rewriteResult.message || '').trim() || 'どのタスクを更新するか確認させてください。';
     }
 
-    await replaceTaskFileForDate({
+    const nextTasks = await replaceTaskFileForDate({
       dateKey: dateContext.dateKey,
       content: String(rewriteResult.content || '').trim(),
       allowedNewTaskIds: newTaskIds,
       currentUserId: userId
     });
 
-    return String(rewriteResult.message || '').trim() || '今日のタスクを更新しました。';
+    const syncResult = await syncGoogleTasksForDate({
+      dateKey: dateContext.dateKey,
+      localTasks: nextTasks
+    });
+
+    const baseMessage = String(rewriteResult.message || '').trim() || '今日のタスクを更新しました。';
+    if (!syncResult.enabled || syncResult.failed === 0) {
+      return baseMessage;
+    }
+
+    if (syncResult.retryable > 0) {
+      return `${baseMessage}（Google同期で一部再試行予定）`;
+    }
+
+    return `${baseMessage}（Google同期で一部失敗）`;
   }
 
   if (actionPlan.action === 'list_tasks') {

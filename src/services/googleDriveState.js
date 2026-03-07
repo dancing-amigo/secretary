@@ -13,6 +13,7 @@ const LOG_FILE_NAME = 'log.md';
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
 let cachedNotificationStateFileId = null;
+let cachedGoogleTasksSyncStateFileId = null;
 let cachedTasksFolderId = null;
 let cachedConversationsFolderId = null;
 let cachedLogFileId = null;
@@ -51,6 +52,22 @@ function normalizeConversationState(state) {
 
   if (!state.conversations || typeof state.conversations !== 'object' || Array.isArray(state.conversations)) {
     state.conversations = {};
+  }
+
+  return state;
+}
+
+function normalizeGoogleTasksSyncState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return { mappings: {}, failures: [] };
+  }
+
+  if (!state.mappings || typeof state.mappings !== 'object' || Array.isArray(state.mappings)) {
+    state.mappings = {};
+  }
+
+  if (!Array.isArray(state.failures)) {
+    state.failures = [];
   }
 
   return state;
@@ -141,6 +158,7 @@ function buildMultipartBody(metadata, content, contentMimeType = 'application/js
 
 async function findStateFileId({ name, initialContent, cacheKey }) {
   if (cacheKey === 'notification' && cachedNotificationStateFileId) return cachedNotificationStateFileId;
+  if (cacheKey === 'googleTasksSync' && cachedGoogleTasksSyncStateFileId) return cachedGoogleTasksSyncStateFileId;
 
   const existingId = await findDriveChildId({
     parentId: config.googleDrive.folderId,
@@ -148,6 +166,7 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   });
   if (existingId) {
     if (cacheKey === 'notification') cachedNotificationStateFileId = existingId;
+    if (cacheKey === 'googleTasksSync') cachedGoogleTasksSyncStateFileId = existingId;
     return existingId;
   }
 
@@ -172,6 +191,7 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   });
 
   if (cacheKey === 'notification') cachedNotificationStateFileId = created.data?.id || null;
+  if (cacheKey === 'googleTasksSync') cachedGoogleTasksSyncStateFileId = created.data?.id || null;
   return created.data?.id || null;
 }
 
@@ -497,6 +517,40 @@ async function writeNotificationState(state) {
   await writeDriveTextFile(fileId, JSON.stringify(normalizeState(state), null, 2), 'application/json');
 }
 
+async function readGoogleTasksSyncState() {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findStateFileId({
+    name: config.googleTasks.syncStateFileName,
+    initialContent: { mappings: {}, failures: [] },
+    cacheKey: 'googleTasksSync'
+  });
+  const text = (await readDriveTextFile(fileId)).trim();
+  if (!text) return normalizeGoogleTasksSyncState({});
+
+  try {
+    return normalizeGoogleTasksSyncState(JSON.parse(text));
+  } catch {
+    return normalizeGoogleTasksSyncState({});
+  }
+}
+
+async function writeGoogleTasksSyncState(state) {
+  const fileId = await findStateFileId({
+    name: config.googleTasks.syncStateFileName,
+    initialContent: { mappings: {}, failures: [] },
+    cacheKey: 'googleTasksSync'
+  });
+  await writeDriveTextFile(
+    fileId,
+    JSON.stringify(normalizeGoogleTasksSyncState(state), null, 2),
+    'application/json'
+  );
+}
+
 function getDateKeyInTimeZone(date, timeZone = config.tz) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone,
@@ -707,6 +761,72 @@ export async function replaceTaskFileForDate({ dateKey, content, allowedNewTaskI
 
   await writeDriveTextFile(fileId, `${normalizedContent}\n`);
   return nextTasks;
+}
+
+export async function readGoogleTaskSyncMappingsForDate(dateKey) {
+  const state = await readGoogleTasksSyncState();
+  return Object.entries(state.mappings)
+    .map(([localTaskId, record]) => {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+      if (String(record.dateKey || '') !== String(dateKey || '')) return null;
+
+      return {
+        localTaskId,
+        googleTaskId: String(record.googleTaskId || '').trim(),
+        taskListId: String(record.taskListId || '').trim(),
+        dateKey: String(record.dateKey || '').trim(),
+        lastSyncedAt: String(record.lastSyncedAt || '').trim()
+      };
+    })
+    .filter(Boolean);
+}
+
+export async function upsertGoogleTaskSyncMapping({ localTaskId, googleTaskId, taskListId, dateKey, lastSyncedAt }) {
+  const normalizedLocalTaskId = String(localTaskId || '').trim();
+  if (!normalizedLocalTaskId) {
+    throw new Error('localTaskId is required');
+  }
+
+  const state = await readGoogleTasksSyncState();
+  state.mappings[normalizedLocalTaskId] = {
+    googleTaskId: String(googleTaskId || '').trim(),
+    taskListId: String(taskListId || '').trim(),
+    dateKey: String(dateKey || '').trim(),
+    lastSyncedAt: String(lastSyncedAt || '').trim()
+  };
+  await writeGoogleTasksSyncState(state);
+  return state.mappings[normalizedLocalTaskId];
+}
+
+export async function removeGoogleTaskSyncMapping(localTaskId) {
+  const normalizedLocalTaskId = String(localTaskId || '').trim();
+  if (!normalizedLocalTaskId) {
+    return false;
+  }
+
+  const state = await readGoogleTasksSyncState();
+  const existed = Boolean(state.mappings[normalizedLocalTaskId]);
+  delete state.mappings[normalizedLocalTaskId];
+  await writeGoogleTasksSyncState(state);
+  return existed;
+}
+
+export async function appendGoogleTaskSyncFailure(entry) {
+  const state = await readGoogleTasksSyncState();
+  const normalizedEntry = {
+    at: String(entry?.at || new Date().toISOString()),
+    dateKey: String(entry?.dateKey || '').trim(),
+    localTaskId: String(entry?.localTaskId || '').trim(),
+    googleTaskId: String(entry?.googleTaskId || '').trim(),
+    taskListId: String(entry?.taskListId || '').trim(),
+    operation: String(entry?.operation || '').trim(),
+    retryable: Boolean(entry?.retryable),
+    error: String(entry?.error || 'unknown error').trim().slice(0, 500)
+  };
+
+  state.failures = [...state.failures, normalizedEntry].slice(-200);
+  await writeGoogleTasksSyncState(state);
+  return normalizedEntry;
 }
 
 export async function reserveNotificationWindow({ slot, dateKey, localTime, now = new Date() }) {

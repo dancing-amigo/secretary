@@ -6,10 +6,11 @@
 - バンクーバー時間の夜ウィンドウ `21:30-22:30` に当日サマリーを1回だけ送信
 - LINE自由形式メッセージをLLMで判定し、当日タスクの更新・一覧取得・その他応答を返す
 - Google Drive の `tasks/YYYY-MM-DD.md` に日次タスクを保存する
+- `modify_tasks` 後に Google Tasks へ同内容を順方向同期する
 - Google Drive の `conversations/YYYY-MM-DD.json` に日次会話履歴を保存する
 - Google Drive 直下の `log.md` に夜サマリーを日次セクションで蓄積する
 
-アクション判定は、ユーザー入力に加えて Google Drive 上の当日 `tasks/YYYY-MM-DD.md` を参照して行います。タスク更新系は `modify_tasks` に統一されています。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、`modify_tasks` 用 LLM は現在の `tasks/YYYY-MM-DD.md` 全文とユーザー指示をもとに、更新後の Markdown 全文をそのまま返します。プログラム側はその Markdown を検証して Google Drive に書き込み、`list_tasks` は保存済みの `title` / `status` のみを返します。
+アクション判定は、ユーザー入力に加えて Google Drive 上の当日 `tasks/YYYY-MM-DD.md` を参照して行います。タスク更新系は `modify_tasks` に統一されています。追加、編集、削除、完了報告、detail 更新はすべて同じ更新経路で処理され、`modify_tasks` 用 LLM は現在の `tasks/YYYY-MM-DD.md` 全文とユーザー指示をもとに、更新後の Markdown 全文をそのまま返します。プログラム側はその Markdown を検証して Google Drive に書き込み、その後 Google Tasks の同一タスクリストへリコンシリエーションします。Google Tasks との対応関係と同期失敗ログは Google Drive 上の `task-sync-state.json` に保存され、`list_tasks` は保存済みの `title` / `status` のみを返します。
 
 ## 必須環境変数
 
@@ -33,6 +34,9 @@
 - `GOOGLE_DRIVE_ENABLED` / `GOOGLE_DRIVE_FOLDER_ID`
 - `GOOGLE_DRIVE_NOTIFICATION_STATE_FILE_NAME`
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
+- `GOOGLE_TASKS_ENABLED`（未指定時は `GOOGLE_DRIVE_ENABLED` を継承）
+- `GOOGLE_TASKS_TASKLIST_ID`（既定: `@default`）
+- `GOOGLE_TASKS_SYNC_STATE_FILE_NAME`（既定: `task-sync-state.json`）
 
 ## 起動
 

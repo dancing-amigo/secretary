@@ -430,7 +430,12 @@ async function writeNotificationState(state) {
     initialContent: { notifications: {} },
     cacheKey: 'notification'
   });
-  await writeDriveTextFile(fileId, JSON.stringify(normalizeState(state), null, 2), 'application/json');
+  const normalizedState = normalizeState(state);
+  normalizedState.notifications = pruneNotificationRecords(
+    normalizedState.notifications,
+    config.googleDrive.notificationRetentionDays
+  );
+  await writeDriveTextFile(fileId, JSON.stringify(normalizedState, null, 2), 'application/json');
 }
 
 async function readGoogleCalendarSyncState() {
@@ -460,9 +465,18 @@ async function writeGoogleCalendarSyncState(state) {
     initialContent: { failures: [], pulls: {} },
     cacheKey: 'googleCalendarSync'
   });
+  const normalizedState = normalizeGoogleCalendarSyncState(state);
+  normalizedState.failures = pruneGoogleCalendarFailures(
+    normalizedState.failures,
+    config.googleCalendar.pullRetentionDays
+  ).slice(-200);
+  normalizedState.pulls = pruneGoogleCalendarPulls(
+    normalizedState.pulls,
+    config.googleCalendar.pullRetentionDays
+  );
   await writeDriveTextFile(
     fileId,
-    JSON.stringify(normalizeGoogleCalendarSyncState(state), null, 2),
+    JSON.stringify(normalizedState, null, 2),
     'application/json'
   );
 }
@@ -477,6 +491,76 @@ function getDateKeyInTimeZone(date, timeZone = config.tz) {
 
   const get = (type) => parts.find((part) => part.type === type)?.value || '';
   return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function getRetentionCutoffDateKey(retentionDays, timeZone = config.tz, now = new Date()) {
+  const normalizedDays = Number(retentionDays);
+  if (!Number.isFinite(normalizedDays) || normalizedDays < 1) {
+    return '';
+  }
+
+  const cutoff = new Date(now);
+  cutoff.setUTCDate(cutoff.getUTCDate() - (normalizedDays - 1));
+  return getDateKeyInTimeZone(cutoff, timeZone);
+}
+
+function pruneNotificationRecords(notifications, retentionDays, timeZone = config.tz, now = new Date()) {
+  const source = notifications && typeof notifications === 'object' && !Array.isArray(notifications)
+    ? notifications
+    : {};
+  const cutoffDateKey = getRetentionCutoffDateKey(retentionDays, timeZone, now);
+  if (!cutoffDateKey) {
+    return { ...source };
+  }
+
+  return Object.fromEntries(
+    Object.entries(source).filter(([key]) => {
+      const recordDateKey = String(key || '').split(':').pop() || '';
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(recordDateKey)) {
+        return true;
+      }
+
+      return recordDateKey >= cutoffDateKey;
+    })
+  );
+}
+
+function pruneGoogleCalendarPulls(pulls, retentionDays, timeZone = config.tz, now = new Date()) {
+  const source = pulls && typeof pulls === 'object' && !Array.isArray(pulls)
+    ? pulls
+    : {};
+  const cutoffDateKey = getRetentionCutoffDateKey(retentionDays, timeZone, now);
+  if (!cutoffDateKey) {
+    return { ...source };
+  }
+
+  return Object.fromEntries(
+    Object.entries(source).filter(([dateKey]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateKey || ''))) {
+        return true;
+      }
+
+      return dateKey >= cutoffDateKey;
+    })
+  );
+}
+
+function pruneGoogleCalendarFailures(failures, retentionDays, now = new Date()) {
+  const source = Array.isArray(failures) ? failures : [];
+  const normalizedDays = Number(retentionDays);
+  if (!Number.isFinite(normalizedDays) || normalizedDays < 1) {
+    return [...source];
+  }
+
+  const cutoffTime = now.getTime() - ((normalizedDays - 1) * 24 * 60 * 60 * 1000);
+  return source.filter((failure) => {
+    const parsedAt = Date.parse(String(failure?.at || '').trim());
+    if (!Number.isFinite(parsedAt)) {
+      return true;
+    }
+
+    return parsedAt >= cutoffTime;
+  });
 }
 
 function listDateKeysBetween({ since, until, timeZone = config.tz }) {

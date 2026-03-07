@@ -25,6 +25,12 @@ function normalizeTimeZone(rawValue, fallback = "America/Vancouver") {
   return fallback;
 }
 
+function normalizeRetentionDays(rawValue, fallback) {
+  const value = Number.parseInt(String(rawValue || "").trim(), 10);
+  if (!Number.isFinite(value) || value < 1) return fallback;
+  return value;
+}
+
 export const config = {
   port: Number(process.env.PORT || 8787),
   tz: normalizeTimeZone(
@@ -65,6 +71,10 @@ export const config = {
     notificationStateFileName:
       process.env.GOOGLE_DRIVE_NOTIFICATION_STATE_FILE_NAME ||
       "notification-state.json",
+    notificationRetentionDays: normalizeRetentionDays(
+      process.env.GOOGLE_DRIVE_NOTIFICATION_RETENTION_DAYS,
+      7,
+    ),
     oauthClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || "",
     oauthClientSecret: process.env.GOOGLE_OAUTH_CLIENT_SECRET || "",
     oauthRefreshToken: process.env.GOOGLE_OAUTH_REFRESH_TOKEN || "",
@@ -82,6 +92,10 @@ export const config = {
     eventColorId: process.env.GOOGLE_CALENDAR_EVENT_COLOR_ID || "1",
     syncStateFileName:
       process.env.GOOGLE_CALENDAR_SYNC_STATE_FILE_NAME || "task-sync-state.json",
+    pullRetentionDays: normalizeRetentionDays(
+      process.env.GOOGLE_CALENDAR_PULL_RETENTION_DAYS,
+      7,
+    ),
   },
 };
 

@@ -88,6 +88,11 @@
 - action 名を `modify_events` / `list_events` へ改め、分類と文言を event 中心へ揃えた
 - Calendar description の管理 metadata を `status: todo|done` のみに簡素化した
 
+### `STEP15.md`
+- Google Drive の `states/*.json` に対して保持期間ベースの prune を追加した
+- `notification-state.json` と `task-sync-state.json` の古い日付キー、および失敗ログを保存時に自動削除する
+- 保持期間は環境変数で上書き可能とし、既定値は 7 日にした
+
 ## 更新ルール
 
 - 新しいプランを `plans/` に追加したら、この README に項目と要約を追記する

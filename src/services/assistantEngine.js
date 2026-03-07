@@ -10,7 +10,7 @@ import {
   updateNotificationRecord,
   upsertDailyLog
 } from './googleDriveState.js';
-import { createStructuredOutput, createTextOutput } from './openaiClient.js';
+import { createStructuredOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -47,6 +47,20 @@ const NIGHT_SUMMARY_SCHEMA = {
       type: 'array',
       items: { type: 'string' }
     }
+  }
+};
+
+const TASK_REWRITE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['outcome', 'content', 'message'],
+  properties: {
+    outcome: {
+      type: 'string',
+      enum: ['updated', 'clarify']
+    },
+    content: { type: 'string' },
+    message: { type: 'string' }
   }
 };
 
@@ -261,14 +275,21 @@ function buildNewTaskIdCandidates(count = 5) {
 
 function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileContent, newTaskIds, userId }) {
   return [
-    'あなたは今日のタスクファイル全文を更新する役割です。',
+    'あなたは今日のタスクファイル全文とLINE返信文を同時に作る役割です。',
     `現在のローカル日付: ${dateKey}`,
     `現在のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
     '',
-    'あなたの出力は、そのまま tasks/YYYY-MM-DD.md に書き込まれます。',
-    '説明文やコードフェンスは付けず、最終的な Markdown 本文だけを返してください。',
-    '曖昧で安全に更新できない場合のみ、Markdown の代わりに 1 行で "CLARIFY: ..." を返してください。',
+    'JSON オブジェクトで返してください。',
+    'outcome:',
+    '- updated: 安全に更新できる場合',
+    '- clarify: 対象が曖昧で安全に更新できない場合',
+    'content:',
+    '- updated のときは、そのまま tasks/YYYY-MM-DD.md に書き込める Markdown 本文',
+    '- clarify のときは空文字でよい',
+    'message:',
+    '- updated のときは、LINE に送る変更完了メッセージ',
+    '- clarify のときは、確認したい内容を短い日本語で返す',
     '',
     '出力フォーマット:',
     `# Tasks ${dateKey}`,
@@ -290,6 +311,8 @@ function buildTaskRewritePrompt({ text, dateKey, localTime, timeZone, fileConten
     '- 削除指示があれば、そのタスクは最終ファイルから除外してください。',
     '- タスクが 0 件なら、Items セクションには "- まだタスクはありません" の 1 行だけを書いてください。',
     '- タスクの並び順は自然でよいですが、残すタスクの内容を勝手に落とさないでください。',
+    '- message には、何を追加・完了・更新・削除したかを簡潔に書いてください。',
+    '- message は自然なLINEメッセージとして、そのまま送れる形にしてください。',
     '',
     `現在のユーザーID: ${userId || '(empty)'}`,
     '新規タスク用の id 候補:',
@@ -314,9 +337,11 @@ async function classifyAction({ text, dateContext, taskContext }) {
 }
 
 async function rewriteTaskFile({ text, dateContext, fileContent, newTaskIds, userId }) {
-  return createTextOutput({
+  return createStructuredOutput({
     model: config.openai.taskModel,
-    systemPrompt: '指定された形式の Markdown 本文だけ、または "CLARIFY: ..." の 1 行だけを返してください。',
+    schemaName: 'task_rewrite',
+    schema: TASK_REWRITE_SCHEMA,
+    systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
     userPrompt: buildTaskRewritePrompt({ text, ...dateContext, fileContent, newTaskIds, userId })
   });
 }
@@ -388,26 +413,26 @@ export async function processUserMessage({ userId, text }) {
   if (actionPlan.action === 'modify_tasks') {
     const currentFileContent = await readTaskFileForDate(dateContext.dateKey);
     const newTaskIds = buildNewTaskIdCandidates();
-    const rewrittenContent = (await rewriteTaskFile({
+    const rewriteResult = await rewriteTaskFile({
       text: rawText,
       dateContext,
       userId,
       fileContent: currentFileContent,
       newTaskIds
-    })).trim();
+    });
 
-    if (rewrittenContent.startsWith('CLARIFY:')) {
-      return rewrittenContent.slice('CLARIFY:'.length).trim() || 'どのタスクを更新するか確認させてください。';
+    if (rewriteResult.outcome === 'clarify') {
+      return String(rewriteResult.message || '').trim() || 'どのタスクを更新するか確認させてください。';
     }
 
     await replaceTaskFileForDate({
       dateKey: dateContext.dateKey,
-      content: rewrittenContent,
+      content: String(rewriteResult.content || '').trim(),
       allowedNewTaskIds: newTaskIds,
       currentUserId: userId
     });
 
-    return '今日のタスクを更新しました。';
+    return String(rewriteResult.message || '').trim() || '今日のタスクを更新しました。';
   }
 
   if (actionPlan.action === 'list_tasks') {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   buildGoogleCalendarSyncPlan,
   extractTimeRange,
-  getUtcIsoForCalendarLocalDateTime
+  getCalendarRfc3339ForLocalDateTime
 } from './googleCalendarSync.js';
 
 test('extractTimeRange parses HH:MM range', () => {
@@ -20,14 +20,14 @@ test('extractTimeRange parses Japanese hour range', () => {
   });
 });
 
-test('getUtcIsoForCalendarLocalDateTime converts local time to RFC3339 UTC', () => {
+test('getCalendarRfc3339ForLocalDateTime converts local time to RFC3339 with offset', () => {
   assert.equal(
-    getUtcIsoForCalendarLocalDateTime({
+    getCalendarRfc3339ForLocalDateTime({
       dateKey: '2026-03-07',
       time: '10:00:00',
       timeZone: 'America/Vancouver'
     }),
-    '2026-03-07T18:00:00.000Z'
+    '2026-03-07T10:00:00-08:00'
   );
 });
 

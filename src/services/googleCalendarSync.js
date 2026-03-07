@@ -329,7 +329,11 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
   for (const operation of operations) {
     try {
       if (operation.type === 'create') {
-        const created = await createCalendarEvent(operation);
+        const created = await createCalendarEvent({
+          task: operation.task,
+          dateKey,
+          timeRange: operation.timeRange
+        });
         await upsertGoogleCalendarSyncMapping({
           localTaskId: operation.localTaskId,
           googleCalendarEventId: String(created?.id || '').trim(),
@@ -362,7 +366,11 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
             throw error;
           }
 
-          const created = await createCalendarEvent(operation);
+          const created = await createCalendarEvent({
+            task: operation.task,
+            dateKey,
+            timeRange: operation.timeRange
+          });
           await upsertGoogleCalendarSyncMapping({
             localTaskId: operation.localTaskId,
             googleCalendarEventId: String(created?.id || '').trim(),

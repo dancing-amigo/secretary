@@ -8,7 +8,6 @@ const required = [
   'src/services/assistantEngine.js',
   'src/services/scheduler.js',
   'src/services/googleDriveState.js',
-  'src/services/googleTasksSync.js',
   'src/services/googleCalendarSync.js'
 ];
 

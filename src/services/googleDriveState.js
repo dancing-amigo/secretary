@@ -13,7 +13,7 @@ const LOG_FILE_NAME = 'log.md';
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
 let cachedNotificationStateFileId = null;
-let cachedGoogleTasksSyncStateFileId = null;
+let cachedGoogleCalendarSyncStateFileId = null;
 let cachedTasksFolderId = null;
 let cachedConversationsFolderId = null;
 let cachedLogFileId = null;
@@ -57,7 +57,7 @@ function normalizeConversationState(state) {
   return state;
 }
 
-function normalizeGoogleTasksSyncState(state) {
+function normalizeGoogleCalendarSyncState(state) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) {
     return { mappings: {}, failures: [] };
   }
@@ -158,7 +158,7 @@ function buildMultipartBody(metadata, content, contentMimeType = 'application/js
 
 async function findStateFileId({ name, initialContent, cacheKey }) {
   if (cacheKey === 'notification' && cachedNotificationStateFileId) return cachedNotificationStateFileId;
-  if (cacheKey === 'googleTasksSync' && cachedGoogleTasksSyncStateFileId) return cachedGoogleTasksSyncStateFileId;
+  if (cacheKey === 'googleCalendarSync' && cachedGoogleCalendarSyncStateFileId) return cachedGoogleCalendarSyncStateFileId;
 
   const existingId = await findDriveChildId({
     parentId: config.googleDrive.folderId,
@@ -166,7 +166,7 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   });
   if (existingId) {
     if (cacheKey === 'notification') cachedNotificationStateFileId = existingId;
-    if (cacheKey === 'googleTasksSync') cachedGoogleTasksSyncStateFileId = existingId;
+    if (cacheKey === 'googleCalendarSync') cachedGoogleCalendarSyncStateFileId = existingId;
     return existingId;
   }
 
@@ -191,7 +191,7 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
   });
 
   if (cacheKey === 'notification') cachedNotificationStateFileId = created.data?.id || null;
-  if (cacheKey === 'googleTasksSync') cachedGoogleTasksSyncStateFileId = created.data?.id || null;
+  if (cacheKey === 'googleCalendarSync') cachedGoogleCalendarSyncStateFileId = created.data?.id || null;
   return created.data?.id || null;
 }
 
@@ -517,36 +517,36 @@ async function writeNotificationState(state) {
   await writeDriveTextFile(fileId, JSON.stringify(normalizeState(state), null, 2), 'application/json');
 }
 
-async function readGoogleTasksSyncState() {
+async function readGoogleCalendarSyncState() {
   const configError = driveStateConfigError();
   if (configError) {
     throw new Error(configError);
   }
 
   const fileId = await findStateFileId({
-    name: config.googleTasks.syncStateFileName,
+    name: config.googleCalendar.syncStateFileName,
     initialContent: { mappings: {}, failures: [] },
-    cacheKey: 'googleTasksSync'
+    cacheKey: 'googleCalendarSync'
   });
   const text = (await readDriveTextFile(fileId)).trim();
-  if (!text) return normalizeGoogleTasksSyncState({});
+  if (!text) return normalizeGoogleCalendarSyncState({});
 
   try {
-    return normalizeGoogleTasksSyncState(JSON.parse(text));
+    return normalizeGoogleCalendarSyncState(JSON.parse(text));
   } catch {
-    return normalizeGoogleTasksSyncState({});
+    return normalizeGoogleCalendarSyncState({});
   }
 }
 
-async function writeGoogleTasksSyncState(state) {
+async function writeGoogleCalendarSyncState(state) {
   const fileId = await findStateFileId({
-    name: config.googleTasks.syncStateFileName,
+    name: config.googleCalendar.syncStateFileName,
     initialContent: { mappings: {}, failures: [] },
-    cacheKey: 'googleTasksSync'
+    cacheKey: 'googleCalendarSync'
   });
   await writeDriveTextFile(
     fileId,
-    JSON.stringify(normalizeGoogleTasksSyncState(state), null, 2),
+    JSON.stringify(normalizeGoogleCalendarSyncState(state), null, 2),
     'application/json'
   );
 }
@@ -763,8 +763,8 @@ export async function replaceTaskFileForDate({ dateKey, content, allowedNewTaskI
   return nextTasks;
 }
 
-export async function readGoogleTaskSyncMappingsForDate(dateKey) {
-  const state = await readGoogleTasksSyncState();
+export async function readGoogleCalendarSyncMappingsForDate(dateKey) {
+  const state = await readGoogleCalendarSyncState();
   return Object.entries(state.mappings)
     .map(([localTaskId, record]) => {
       if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
@@ -772,8 +772,6 @@ export async function readGoogleTaskSyncMappingsForDate(dateKey) {
 
       return {
         localTaskId,
-        googleTaskId: String(record.googleTaskId || '').trim(),
-        taskListId: String(record.taskListId || '').trim(),
         googleCalendarEventId: String(record.googleCalendarEventId || '').trim(),
         calendarId: String(record.calendarId || '').trim(),
         dateKey: String(record.dateKey || '').trim(),
@@ -781,27 +779,6 @@ export async function readGoogleTaskSyncMappingsForDate(dateKey) {
       };
     })
     .filter(Boolean);
-}
-
-export async function upsertGoogleTaskSyncMapping({ localTaskId, googleTaskId, taskListId, dateKey, lastSyncedAt }) {
-  const normalizedLocalTaskId = String(localTaskId || '').trim();
-  if (!normalizedLocalTaskId) {
-    throw new Error('localTaskId is required');
-  }
-
-  const state = await readGoogleTasksSyncState();
-  const previous = state.mappings[normalizedLocalTaskId] || {};
-  state.mappings[normalizedLocalTaskId] = {
-    ...previous,
-    googleTaskId: String(googleTaskId || previous.googleTaskId || '').trim(),
-    taskListId: String(taskListId || previous.taskListId || '').trim(),
-    googleCalendarEventId: String(previous.googleCalendarEventId || '').trim(),
-    calendarId: String(previous.calendarId || '').trim(),
-    dateKey: String(dateKey || previous.dateKey || '').trim(),
-    lastSyncedAt: String(lastSyncedAt || previous.lastSyncedAt || '').trim()
-  };
-  await writeGoogleTasksSyncState(state);
-  return state.mappings[normalizedLocalTaskId];
 }
 
 export async function upsertGoogleCalendarSyncMapping({
@@ -816,32 +793,16 @@ export async function upsertGoogleCalendarSyncMapping({
     throw new Error('localTaskId is required');
   }
 
-  const state = await readGoogleTasksSyncState();
+  const state = await readGoogleCalendarSyncState();
   const previous = state.mappings[normalizedLocalTaskId] || {};
   state.mappings[normalizedLocalTaskId] = {
-    ...previous,
-    googleTaskId: String(previous.googleTaskId || '').trim(),
-    taskListId: String(previous.taskListId || '').trim(),
     googleCalendarEventId: String(googleCalendarEventId || previous.googleCalendarEventId || '').trim(),
     calendarId: String(calendarId || previous.calendarId || '').trim(),
     dateKey: String(dateKey || previous.dateKey || '').trim(),
     lastSyncedAt: String(lastSyncedAt || previous.lastSyncedAt || '').trim()
   };
-  await writeGoogleTasksSyncState(state);
+  await writeGoogleCalendarSyncState(state);
   return state.mappings[normalizedLocalTaskId];
-}
-
-export async function removeGoogleTaskSyncMapping(localTaskId) {
-  const normalizedLocalTaskId = String(localTaskId || '').trim();
-  if (!normalizedLocalTaskId) {
-    return false;
-  }
-
-  const state = await readGoogleTasksSyncState();
-  const existed = Boolean(state.mappings[normalizedLocalTaskId]);
-  delete state.mappings[normalizedLocalTaskId];
-  await writeGoogleTasksSyncState(state);
-  return existed;
 }
 
 export async function removeGoogleCalendarSyncMapping(localTaskId) {
@@ -850,43 +811,32 @@ export async function removeGoogleCalendarSyncMapping(localTaskId) {
     return false;
   }
 
-  const state = await readGoogleTasksSyncState();
+  const state = await readGoogleCalendarSyncState();
   const previous = state.mappings[normalizedLocalTaskId];
   if (!previous) {
     return false;
   }
 
-  const nextRecord = {
-    ...previous,
-    googleCalendarEventId: '',
-    calendarId: ''
-  };
-
-  if (!nextRecord.googleTaskId && !nextRecord.taskListId) {
-    delete state.mappings[normalizedLocalTaskId];
-  } else {
-    state.mappings[normalizedLocalTaskId] = nextRecord;
-  }
-
-  await writeGoogleTasksSyncState(state);
+  delete state.mappings[normalizedLocalTaskId];
+  await writeGoogleCalendarSyncState(state);
   return true;
 }
 
-export async function appendGoogleTaskSyncFailure(entry) {
-  const state = await readGoogleTasksSyncState();
+export async function appendGoogleCalendarSyncFailure(entry) {
+  const state = await readGoogleCalendarSyncState();
   const normalizedEntry = {
     at: String(entry?.at || new Date().toISOString()),
     dateKey: String(entry?.dateKey || '').trim(),
     localTaskId: String(entry?.localTaskId || '').trim(),
-    googleTaskId: String(entry?.googleTaskId || '').trim(),
-    taskListId: String(entry?.taskListId || '').trim(),
+    googleCalendarEventId: String(entry?.googleCalendarEventId || '').trim(),
+    calendarId: String(entry?.calendarId || '').trim(),
     operation: String(entry?.operation || '').trim(),
     retryable: Boolean(entry?.retryable),
     error: String(entry?.error || 'unknown error').trim().slice(0, 500)
   };
 
   state.failures = [...state.failures, normalizedEntry].slice(-200);
-  await writeGoogleTasksSyncState(state);
+  await writeGoogleCalendarSyncState(state);
   return normalizedEntry;
 }
 

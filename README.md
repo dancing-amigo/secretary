@@ -22,7 +22,7 @@
 
 任意:
 
-- `TZ`（既定: `America/Vancouver`）
+- `APP_TIMEZONE`（既定: `America/Vancouver`。`TZ` は後方互換のフォールバックとしてのみ参照）
 - `PORT`（既定: `8787`）
 - `MORNING_PLAN_CRON`（既定: `0 8 * * *`。ローカル常駐起動時のみ使用）
 - `NIGHT_REVIEW_CRON`（既定: `0 22 * * *`。ローカル常駐起動時のみ使用）
@@ -37,7 +37,8 @@
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` / `GOOGLE_OAUTH_REFRESH_TOKEN` / `GOOGLE_OAUTH_REDIRECT_URI`
 - `GOOGLE_CALENDAR_ENABLED`（未指定時は `GOOGLE_DRIVE_ENABLED` を継承）
 - `GOOGLE_CALENDAR_ID`（既定: `primary`）
-- `GOOGLE_CALENDAR_EVENT_COLOR_ID`（既定: `1`。Peacock）
+- `GOOGLE_CALENDAR_EVENT_COLOR_ID`（既定: `1`）
+- `GOOGLE_CALENDAR_SYNC_STATE_FILE_NAME`（既定: `task-sync-state.json`）
 
 補足:
 

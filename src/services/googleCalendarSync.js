@@ -1,8 +1,8 @@
 import axios from 'axios';
 import { config } from '../config.js';
 import {
-  appendGoogleTaskSyncFailure,
-  readGoogleTaskSyncMappingsForDate,
+  appendGoogleCalendarSyncFailure,
+  readGoogleCalendarSyncMappingsForDate,
   removeGoogleCalendarSyncMapping,
   upsertGoogleCalendarSyncMapping
 } from './googleDriveState.js';
@@ -313,12 +313,12 @@ async function deleteCalendarEvent(googleCalendarEventId) {
 }
 
 async function recordFailure({ dateKey, localTaskId, googleCalendarEventId, operation, error }) {
-  await appendGoogleTaskSyncFailure({
+  await appendGoogleCalendarSyncFailure({
     at: new Date().toISOString(),
     dateKey,
     localTaskId,
-    googleTaskId: googleCalendarEventId,
-    taskListId: config.googleCalendar.calendarId,
+    googleCalendarEventId,
+    calendarId: config.googleCalendar.calendarId,
     operation,
     retryable: isRetryableGoogleError(error),
     error: formatGoogleError(error)
@@ -338,7 +338,7 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
     };
   }
 
-  const mappings = await readGoogleTaskSyncMappingsForDate(dateKey);
+  const mappings = await readGoogleCalendarSyncMappingsForDate(dateKey);
   const operations = buildGoogleCalendarSyncPlan({ dateKey, localTasks, mappings });
   const summary = {
     enabled: true,

@@ -2,9 +2,6 @@ import axios from 'axios';
 import { config } from '../config.js';
 import {
   appendGoogleCalendarSyncFailure,
-  readGoogleCalendarSyncMappingsForDate,
-  removeGoogleCalendarSyncMapping,
-  upsertGoogleCalendarSyncMapping,
   writeGoogleCalendarPullSnapshot
 } from './googleDriveState.js';
 
@@ -236,51 +233,6 @@ function toAgendaEvent(event) {
   };
 }
 
-function toCalendarEventPayload({ task, dateKey, timeRange }) {
-  const base = {
-    summary: String(task.title || '').trim().slice(0, 1024),
-    description: String(task.detail || '').trim().slice(0, 8192) || undefined,
-    colorId: String(config.googleCalendar.eventColorId || '').trim() || undefined
-  };
-
-  if (!timeRange) {
-    const { year, month, day } = parseLocalDateParts(dateKey);
-    const nextDate = new Date(Date.UTC(year, month - 1, day));
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1);
-    const nextDateKey = nextDate.toISOString().slice(0, 10);
-
-    return {
-      ...base,
-      start: {
-        date: String(dateKey).trim()
-      },
-      end: {
-        date: nextDateKey
-      }
-    };
-  }
-
-  return {
-    ...base,
-    start: {
-      dateTime: getCalendarRfc3339ForLocalDateTime({
-        dateKey,
-        time: timeRange.startTime,
-        timeZone: config.tz
-      }),
-      timeZone: config.tz
-    },
-    end: {
-      dateTime: getCalendarRfc3339ForLocalDateTime({
-        dateKey,
-        time: timeRange.endTime,
-        timeZone: config.tz
-      }),
-      timeZone: config.tz
-    }
-  };
-}
-
 function toAgendaEventPayload({ agendaEvent, dateKey }) {
   const title = String(agendaEvent?.title || '').trim().slice(0, 1024);
   const kind = normalizeAgendaKind(agendaEvent?.kind);
@@ -323,51 +275,6 @@ function toAgendaEventPayload({ agendaEvent, dateKey }) {
       timeZone: config.tz
     }
   };
-}
-
-export function buildGoogleCalendarSyncPlan({ dateKey, localTasks, mappings }) {
-  const normalizedDateKey = String(dateKey || '').trim();
-  const mappingList = (Array.isArray(mappings) ? mappings : []).filter(
-    (mapping) => String(mapping?.dateKey || '').trim() === normalizedDateKey
-  );
-  const mappingByLocalId = new Map(
-    mappingList.map((mapping) => [String(mapping.localTaskId || '').trim(), mapping])
-  );
-  const operations = [];
-  const localIds = new Set();
-
-  for (const task of Array.isArray(localTasks) ? localTasks : []) {
-    const localTaskId = String(task?.id || '').trim();
-    if (!localTaskId) continue;
-    localIds.add(localTaskId);
-
-    const timeRange = extractTimeRange(task.detail) || extractTimeRange(task.title);
-    const mapping = mappingByLocalId.get(localTaskId);
-
-    if (task.status === 'done') {
-      if (mapping?.googleCalendarEventId) {
-        operations.push({ type: 'delete', localTaskId, mapping });
-      }
-      continue;
-    }
-
-    operations.push({
-      type: mapping?.googleCalendarEventId ? 'upsert' : 'create',
-      localTaskId,
-      mapping,
-      task,
-      timeRange
-    });
-  }
-
-  for (const mapping of mappingList) {
-    const localTaskId = String(mapping.localTaskId || '').trim();
-    if (!localTaskId || localIds.has(localTaskId)) continue;
-    if (!mapping.googleCalendarEventId) continue;
-    operations.push({ type: 'delete', localTaskId, mapping });
-  }
-
-  return operations;
 }
 
 async function getAccessToken() {
@@ -519,28 +426,6 @@ async function listCalendarEventsForDate({ dateKey }) {
   };
 }
 
-async function createCalendarEvent({ task, dateKey, timeRange }) {
-  const payload = toCalendarEventPayload({ task, dateKey, timeRange });
-  const response = await googleCalendarRequest({
-    method: 'post',
-    url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events`,
-    data: payload
-  });
-
-  return response.data;
-}
-
-async function updateCalendarEvent({ googleCalendarEventId, task, dateKey, timeRange }) {
-  const payload = toCalendarEventPayload({ task, dateKey, timeRange });
-  const response = await googleCalendarRequest({
-    method: 'patch',
-    url: `${GOOGLE_CALENDAR_API_URL}/calendars/${encodeURIComponent(config.googleCalendar.calendarId)}/events/${encodeURIComponent(googleCalendarEventId)}`,
-    data: payload
-  });
-
-  return response.data;
-}
-
 async function deleteCalendarEvent(googleCalendarEventId) {
   await googleCalendarRequest({
     method: 'delete',
@@ -568,145 +453,6 @@ async function updateAgendaEvent({ eventId, agendaEvent, dateKey }) {
   return response.data;
 }
 
-async function recordFailure({ dateKey, localTaskId, googleCalendarEventId, operation, error }) {
-  await appendGoogleCalendarSyncFailure({
-    at: new Date().toISOString(),
-    dateKey,
-    localTaskId,
-    googleCalendarEventId,
-    calendarId: config.googleCalendar.calendarId,
-    operation,
-    retryable: isRetryableGoogleError(error),
-    error: formatGoogleError(error)
-  });
-}
-
-export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
-  const configError = googleCalendarConfigError();
-  if (configError) {
-    return {
-      enabled: false,
-      total: 0,
-      succeeded: 0,
-      failed: 0,
-      retryable: 0,
-      errors: []
-    };
-  }
-
-  const mappings = await readGoogleCalendarSyncMappingsForDate(dateKey);
-  const operations = buildGoogleCalendarSyncPlan({ dateKey, localTasks, mappings });
-  const summary = {
-    enabled: true,
-    total: operations.length,
-    succeeded: 0,
-    failed: 0,
-    retryable: 0,
-    errors: []
-  };
-
-  for (const operation of operations) {
-    try {
-      if (operation.type === 'create') {
-        const created = await createCalendarEvent({
-          task: operation.task,
-          dateKey,
-          timeRange: operation.timeRange
-        });
-        await upsertGoogleCalendarSyncMapping({
-          localTaskId: operation.localTaskId,
-          googleCalendarEventId: String(created?.id || '').trim(),
-          calendarId: config.googleCalendar.calendarId,
-          dateKey,
-          lastSyncedAt: new Date().toISOString()
-        });
-        summary.succeeded += 1;
-        continue;
-      }
-
-      if (operation.type === 'upsert') {
-        try {
-          const updated = await updateCalendarEvent({
-            googleCalendarEventId: operation.mapping.googleCalendarEventId,
-            task: operation.task,
-            dateKey,
-            timeRange: operation.timeRange
-          });
-          await upsertGoogleCalendarSyncMapping({
-            localTaskId: operation.localTaskId,
-            googleCalendarEventId: String(updated?.id || operation.mapping.googleCalendarEventId || '').trim(),
-            calendarId: config.googleCalendar.calendarId,
-            dateKey,
-            lastSyncedAt: new Date().toISOString()
-          });
-          summary.succeeded += 1;
-        } catch (error) {
-          if (!isNotFoundError(error)) {
-            throw error;
-          }
-
-          const created = await createCalendarEvent({
-            task: operation.task,
-            dateKey,
-            timeRange: operation.timeRange
-          });
-          await upsertGoogleCalendarSyncMapping({
-            localTaskId: operation.localTaskId,
-            googleCalendarEventId: String(created?.id || '').trim(),
-            calendarId: config.googleCalendar.calendarId,
-            dateKey,
-            lastSyncedAt: new Date().toISOString()
-          });
-          summary.succeeded += 1;
-        }
-        continue;
-      }
-
-      if (operation.type === 'delete') {
-        try {
-          await deleteCalendarEvent(operation.mapping.googleCalendarEventId);
-        } catch (error) {
-          if (!isNotFoundError(error)) {
-            throw error;
-          }
-        }
-
-        await removeGoogleCalendarSyncMapping(operation.localTaskId);
-        summary.succeeded += 1;
-      }
-    } catch (error) {
-      logGoogleCalendarSyncFailure({
-        dateKey,
-        localTaskId: operation.localTaskId,
-        googleCalendarEventId: operation.mapping?.googleCalendarEventId || '',
-        operation: `calendar_${operation.type}`,
-        payload: operation.task && operation.timeRange
-          ? toCalendarEventPayload({
-              task: operation.task,
-              dateKey,
-              timeRange: operation.timeRange
-            })
-          : null,
-        error
-      });
-      await recordFailure({
-        dateKey,
-        localTaskId: operation.localTaskId,
-        googleCalendarEventId: operation.mapping?.googleCalendarEventId || '',
-        operation: `calendar_${operation.type}`,
-        error
-      });
-      summary.failed += 1;
-      if (isRetryableGoogleError(error)) {
-        summary.retryable += 1;
-      }
-      summary.errors.push(formatGoogleError(error));
-    }
-  }
-
-  return summary;
-}
-
 export async function pullGoogleCalendarEventsForDate({ dateKey, operation = 'unknown' } = {}) {
   const configError = googleCalendarConfigError();
   if (configError) {
@@ -723,23 +469,13 @@ export async function pullGoogleCalendarEventsForDate({ dateKey, operation = 'un
   }
 
   const normalizedDateKey = String(dateKey || '').trim();
-  const mappings = await readGoogleCalendarSyncMappingsForDate(normalizedDateKey);
-  const linkedLocalTaskIdByEventId = new Map(
-    mappings
-      .filter((mapping) => String(mapping.googleCalendarEventId || '').trim())
-      .map((mapping) => [String(mapping.googleCalendarEventId || '').trim(), String(mapping.localTaskId || '').trim()])
-  );
-
   const startedAt = new Date().toISOString();
 
   try {
     const listed = await listCalendarEventsForDate({ dateKey: normalizedDateKey });
     const events = listed.items
       .filter((event) => isEventRelevantToDate(event, normalizedDateKey))
-      .map((event) => normalizePulledCalendarEvent({
-        event,
-        linkedLocalTaskId: linkedLocalTaskIdByEventId.get(String(event.id || '').trim()) || ''
-      }))
+      .map((event) => normalizePulledCalendarEvent({ event, linkedLocalTaskId: '' }))
       .filter((event) => event?.eventId);
 
     const completedAt = new Date().toISOString();

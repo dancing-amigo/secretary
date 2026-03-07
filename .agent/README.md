@@ -19,10 +19,10 @@
 ### `STEP6.md`
 - Step 5 で同期済みの Google Calendar event を `log.md` に記録する計画
 - 予定取得そのものは持たず、`log.md` 更新責務に限定する
-- 夜サマリーに予定とタスク進捗の関係も反映する前提
+- 夜サマリーに Calendar event ベースの進捗と予定の関係を反映する前提
 
 ### `STEP7.md`
-- タスクごとの `startTime` / `endTime` に基づく通知仕様の計画
+- Calendar event ごとの `startTime` / `endTime` に基づく通知仕様の計画
 - 開始通知と、終了時点で未完了なら送る通知を定義
 - 時刻変更時の再スケジュールや重複通知防止も含む
 

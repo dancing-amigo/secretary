@@ -15,7 +15,7 @@ Step 6 の責務は `log.md` の更新に限定し、予定取得そのものは
 ## 前提（Step 5完了後）
 - アプリ行動前に Google Calendar event が取得され、当日予定一覧として利用可能になっている
 - `log.md` は Google Drive 直下で日次蓄積されている
-- タスク運用は `tasks/YYYY-MM-DD.md` で継続している
+- 当日運用の正本は Google Calendar event 一覧である
 
 ## 今回の成功条件
 - Step 5 で同期済みの当日予定を `log.md` の当日セクションへ書ける

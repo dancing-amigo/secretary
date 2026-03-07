@@ -74,14 +74,9 @@
 - 会話履歴は `conversations/YYYY-MM-DD.json` に日単位で蓄積し、Google Drive 直下の `log.md` は日次セクション単位で更新するようにした
 
 ### `STEP4.md`
-- `modify_tasks` 後に当日タスク全体を Google Tasks へリコンシリエーションする実装を追加した
-- `task-sync-state.json` で `localTaskId` と `googleTaskId` の対応関係、および同期失敗ログを保持する構成にした
-- 同期失敗時もローカル更新を優先し、LINE 返信には必要時のみ「一部再試行予定 / 一部失敗」を補足する
-
-### `STEP13.md`
-- Google Tasks に当日日付を `due` として設定し、`No date` にならないようにした
-- `14:00〜18:00` などの時刻レンジがあるタスクは Google Calendar イベントとしても同期するようにした
-- 同期 state を `googleCalendarEventId` / `calendarId` まで拡張し、タスク削除や時刻削除時にイベントも追従させるようにした
+- `modify_tasks` 後に当日タスク全体を Google Calendar event へリコンシリエーションする実装を追加した
+- 時刻レンジがあるタスクは時間付きイベント、時刻レンジがないタスクは終日イベントとして同期する構成にした
+- `task-sync-state.json` に `localTaskId` と `googleCalendarEventId` の対応関係、および同期失敗ログを保持し、失敗時は Vercel log にも詳細を出すようにした
 
 ## 更新ルール
 

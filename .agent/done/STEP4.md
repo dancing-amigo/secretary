@@ -1,101 +1,56 @@
-# Step 4: Googleカレンダー連携（`modify_tasks` の外部同期）
+# Step 4: Google Calendar連携（`modify_tasks` の外部同期）
 
-## 目的
-当日タスク更新アクション `modify_tasks`（追加・編集・削除・完了・詳細更新）を起点に、
-同じ変更を Googleカレンダー上で見えるタスク（Google Tasks）にも反映し、
-ローカル管理と外部タスク表示の不整合をなくす。
+## 実施内容
+`modify_tasks` で確定した当日タスク一覧を、Google Calendar のイベントへ片方向同期する実装を追加した。
+当初は Google Tasks 同期も試したが、最終的には Google Calendar event のみを正とする構成へ整理した。
 
-## 固定方針
-- タスク解釈と変更計画の決定は引き続きLLM主導（Step 2方針を維持）
-- Step 4の主責務は「`modify_tasks` の結果をGoogle側へ同期すること」であり、意図判定ロジックの方式は変更しない
-- 同期は当面「アプリ -> Google」の片方向同期を基本とする（Google側の手動変更を逆同期しない）
-- Google側の対象は「Googleカレンダーに表示されるタスク（Google Tasks）」とする
-- タスク完了時はGoogle側でも必ず完了状態へ更新する
-- `detail` が追加/更新された場合は、Google側の詳細欄（notes）へ可能な限り反映する
-- 同期失敗時はアプリ内データを優先保存し、Google同期は再試行可能な失敗として扱う
+## 最終仕様
+- タスクの正本は引き続き Google Drive の `tasks/YYYY-MM-DD.md`
+- `modify_tasks` で保存した当日タスク全体を、そのまま Google Calendar にリコンシリエーションする
+- `detail` または `title` に `14:00〜18:00` / `14時〜18時` のような時刻レンジがあるタスクは時間付きイベントとして作成する
+- 時刻レンジがないタスクは終日イベントとして作成する
+- `status=done` のタスク、およびローカルから削除されたタスクは、対応する Google Calendar イベントを削除する
+- 同期失敗時もローカル更新結果を優先し、LINE 返信には必要時のみ「Google同期で一部失敗」または「一部再試行予定」を補足する
 
-## 前提（Step 1/2/3からの継続）
-- タスクの正本データは Google Drive の `tasks/YYYY-MM-DD.md`
-- 更新アクションは `modify_tasks` に統合済み
-- 夜サマリーやログ蓄積（`log.md`）の仕組みは既存のまま維持
+## 実装詳細
+1. Google Calendar同期基盤
+- OAuth refresh token を使って Google Calendar API を呼ぶ同期サービスを追加した
+- 同期先カレンダー ID とイベント色 ID は環境変数で設定可能にした
+- イベント色は `colorId` で指定できるようにした
 
-## 今回の成功条件
-- `modify_tasks` で新規追加されたタスクがGoogle Tasksにも追加される
-- `modify_tasks` で編集された `title` / `detail` がGoogle Tasksにも反映される
-- `modify_tasks` で削除されたタスクがGoogle Tasks側でも削除される
-- `modify_tasks` で `status=done` になったタスクがGoogle Tasks側でも完了扱いになる
-- 同期対象タスクの対応関係（ローカルID <-> Google taskId）が保持され、後続更新で同一タスクを正しく更新できる
-- 一部同期失敗時に、失敗対象と理由をログ化できる（全体クラッシュしない）
+2. イベント生成ルール
+- 時刻レンジあり:
+  - `start.dateTime` / `end.dateTime` を RFC3339 で生成して時間付きイベントを作成
+- 時刻レンジなし:
+  - `start.date` / `end.date` を使って終日イベントを作成
+- 完了・削除:
+  - 対応するイベントを Google Calendar から削除
 
-## 実装スコープ（Step 4）
-1. Google Tasks連携基盤の追加
-- Google API認証情報を `.env` 経由で設定可能にする
-- 同期対象のタスクリスト（例: primary）を設定可能にする
-- 接続確認（疎通チェック）を起動時または定期ジョブ時に行えるようにする
-
-2. 同期用IDマッピングの導入
-- ローカルタスクごとにGoogle taskIdを保持する仕組みを追加する
-- 最低限必要な管理項目:
+3. 同期状態管理
+- Google Drive 上の `task-sync-state.json` に以下を保持する構成にした
   - `localTaskId`
-  - `googleTaskId`
-  - `taskListId`
+  - `googleCalendarEventId`
+  - `calendarId`
+  - `dateKey`
   - `lastSyncedAt`
-- マッピング不在時は「新規作成」、存在時は「更新/削除/完了更新」の分岐で扱う
+- 同期失敗ログも同じ state ファイルに保持する
 
-3. `modify_tasks` 後の同期フロー追加
-- 追加:
-  - ローカル追加完了後にGoogle Tasksへ作成
-  - 生成された `googleTaskId` をマッピング保存
-- 編集（`title`/`detail`）:
-  - マッピング済みならGoogle Tasks該当タスクを更新
-  - `detail` は要約済み内容をnotesへ反映
-- 削除:
-  - ローカル削除に対応するGoogle Tasksタスクを削除
-  - 削除成功後にマッピングを無効化/削除
-- 完了:
-  - `status=done` 変更時、Google Tasksの完了状態へ更新
-  - 必要に応じて完了時刻もGoogle側に反映
+4. ログと障害調査
+- Google Calendar 同期失敗時は、Vercel の function log にも `operation`、対象 ID、payload、エラー内容を出すようにした
+- Google Drive 上の state と Vercel log の両方から失敗原因を追える構成にした
 
-4. エラー処理・再試行方針
-- 同期失敗してもローカル更新結果は維持する
-- 失敗時は操作種別（create/update/delete/complete）と対象IDを記録する
-- 一時障害（レート制限/ネットワーク）では再試行キューに積める設計にする
-- 恒久失敗（認証失効/権限不足）は運用者が気づけるログを残す
+## 実装中に方針変更した点
+- Google Tasks API では時刻付きタスクを API 経由で安定的に扱えないため、Google Tasks 同期は最終的に廃止した
+- そのため、外部表示は Google Calendar event のみへ一本化した
+- 時間指定のあるタスクと時間指定のないタスクを、どちらも Google Calendar 上で見られるようにした
 
-5. 返信・運用メッセージ方針
-- ユーザー返信は既存方針を維持しつつ、必要時のみ同期状態を補足する
-- 例:
-  - 完全成功: 「今日のタスクを更新しました」
-  - 部分失敗: 「今日のタスクを更新しました（Google同期で一部再試行予定）」
+## 完了時点の到達点
+- LINE で追加・編集・削除・完了した当日タスクが Google Calendar に反映される
+- 時間指定ありタスクは時間付きイベント、時間指定なしタスクは終日イベントとして表示される
+- 同一タスクの再編集時も、既存 eventId に対して更新される
+- 同期失敗時もアプリ全体は止まらず、原因調査に必要なログが残る
 
-## データモデル拡張方針
-- `tasks/YYYY-MM-DD.md` 側には既存項目（`userId`, `title`, `detail`, `status`）を維持
-- Google連携の技術情報は以下いずれかで保持する:
-  - タスク項目に `external.googleTaskId` を持たせる
-  - もしくは別管理ファイル（例: `task-sync-map.md/json`）に分離する
-- どちらを採用しても、一覧表示（`list_tasks`）では内部IDをユーザーに露出しない
-
-## 同期判断ガイド（LLM/実行層向け）
-- `modify_tasks` で確定した変更結果を唯一の同期入力とする（再解釈しない）
-- `detail` は冗長転載を避け、既存の要約済み内容をそのまま利用する
-- 完了報告は `status` 更新を優先し、Google側完了状態との整合を最優先で担保する
-- タスク削除は取り消しが難しいため、対象同定に曖昧さがある場合は実行前確認方針を検討する
-
-## 受け入れテスト（最小）
-1. 「Aを追加」で `modify_tasks` 後、Google TasksにAが作成される
-2. 「Aの詳細は◯◯を追記」で `detail` 更新後、Google Tasksのnotesが更新される
-3. 「Aは完了」で `status=done` 更新後、Google Tasksでも完了表示になる
-4. 「Aは不要」でローカル削除後、Google TasksのAも削除される
-5. 同一タスクを複数回編集しても、毎回同じGoogle taskIdへ更新される（重複作成しない）
-6. Google API一時失敗時、ローカル更新は成功し、同期失敗ログが残る
-7. 再試行後に同期が回復し、ローカルとGoogle表示の整合が取れる
-
-## 非スコープ（Step 4時点）
-- Google側で手動編集されたタスクの逆方向同期（Google -> アプリ）
-- 複数Googleアカウント/複数タスクリストへの同時同期
-- 期限日・リマインダー最適化などの高度な自動スケジューリング
-- 過去日付ファイル全件の一括バックフィル同期
-
-## 完了後の期待効果
-- ユーザーはLINE上で更新したタスクをGoogleカレンダー表示でも同じ状態で確認できる
-- 「追加したのにカレンダーにない」「完了したのに未完了のまま」といった二重管理のズレが減る
+## 非スコープ
+- Google Calendar 側での手動編集の逆方向同期
+- 参加者、場所、会議URL、繰り返し予定などの高度なイベント属性
+- 複数 Google カレンダーへの同時同期

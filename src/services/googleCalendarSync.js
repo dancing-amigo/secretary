@@ -181,6 +181,18 @@ function formatGoogleError(error) {
   return status ? `${status} ${message}` : message;
 }
 
+function logGoogleCalendarSyncFailure({ dateKey, localTaskId, googleCalendarEventId, operation, error }) {
+  console.error('[google-calendar-sync] failed', {
+    dateKey,
+    localTaskId,
+    googleCalendarEventId,
+    calendarId: config.googleCalendar.calendarId,
+    operation,
+    retryable: isRetryableGoogleError(error),
+    error: formatGoogleError(error)
+  });
+}
+
 async function createCalendarEvent({ task, dateKey, timeRange }) {
   const response = await googleCalendarRequest({
     method: 'post',
@@ -307,6 +319,13 @@ export async function syncGoogleCalendarForDate({ dateKey, localTasks }) {
         summary.succeeded += 1;
       }
     } catch (error) {
+      logGoogleCalendarSyncFailure({
+        dateKey,
+        localTaskId: operation.localTaskId,
+        googleCalendarEventId: operation.mapping?.googleCalendarEventId || '',
+        operation: `calendar_${operation.type}`,
+        error
+      });
       await recordFailure({
         dateKey,
         localTaskId: operation.localTaskId,

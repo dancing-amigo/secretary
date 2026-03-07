@@ -161,6 +161,18 @@ function formatGoogleError(error) {
   return status ? `${status} ${message}` : message;
 }
 
+function logGoogleTasksSyncFailure({ dateKey, localTaskId, googleTaskId, operation, error }) {
+  console.error('[google-tasks-sync] failed', {
+    dateKey,
+    localTaskId,
+    googleTaskId,
+    taskListId: config.googleTasks.taskListId,
+    operation,
+    retryable: isRetryableGoogleError(error),
+    error: formatGoogleError(error)
+  });
+}
+
 async function createGoogleTask(task, dateKey) {
   const response = await googleTasksRequest({
     method: 'post',
@@ -303,6 +315,13 @@ export async function syncGoogleTasksForDate({ dateKey, localTasks }) {
         summary.succeeded += 1;
       }
     } catch (error) {
+      logGoogleTasksSyncFailure({
+        dateKey,
+        localTaskId: operation.localTaskId,
+        googleTaskId: operation.mapping?.googleTaskId || '',
+        operation: operation.type,
+        error
+      });
       await recordFailure({
         dateKey,
         localTaskId: operation.localTaskId,

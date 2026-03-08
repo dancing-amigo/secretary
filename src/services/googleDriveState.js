@@ -7,6 +7,8 @@ const GOOGLE_DRIVE_API_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const CONVERSATIONS_FOLDER_NAME = 'conversations';
 const LOG_FILE_NAME = 'log.md';
+const SOUL_FILE_NAME = 'SOUL.md';
+const USER_FILE_NAME = 'USER.md';
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
@@ -409,6 +411,23 @@ async function readDriveTextFile(fileId) {
   });
 
   return Buffer.from(response.data || '').toString('utf8');
+}
+
+async function readRootTextFile(name) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name
+  });
+  if (!fileId) {
+    throw new Error(`Google Drive root file not found: ${name}`);
+  }
+
+  return readDriveTextFile(fileId);
 }
 
 async function writeDriveTextFile(fileId, content, mimeType = 'text/markdown') {
@@ -864,6 +883,14 @@ export async function appendConversationTurn({ userId, role, text, at = new Date
   state.date = dateKey;
   await writeConversationStateForDate(dateKey, state);
   return normalizedTurn;
+}
+
+export async function readSoulMarkdown() {
+  return readRootTextFile(SOUL_FILE_NAME);
+}
+
+export async function readUserMarkdown() {
+  return readRootTextFile(USER_FILE_NAME);
 }
 
 export async function readConversationTurns({ userId, since, until }) {

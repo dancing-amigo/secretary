@@ -16,10 +16,10 @@
 
 ## 進行中プラン一覧
 
-### `STEP10.md`
-- Google Drive ルートの `SOUL.md` / `USER.md` を全 LLM 呼び出しの先頭に毎回注入する設計
-- 順序は `SOUL.md` → `USER.md` → 当日会話履歴 → 最新入力で固定
-- 実装ではなく、今後の全 LLM 経路に適用する規約定義が中心
+### `STEP17.md`
+- 朝ジョブの挨拶文面を固定文ではなく LLM が決める仕様を定義する計画
+- `SOUL.md` / `USER.md` / 前日会話履歴 / 当日予定を読んで朝メッセージを組み立てる
+- 挨拶、今日の予定確認、ユーザーが元気になる一言を必須要素にする
 
 ### `STEP11.md`
 - `SOUL.md` / `USER.md` を編集する専用アクション `edit_soul` / `edit_user` を追加する計画
@@ -77,6 +77,11 @@
 - 当日会話履歴を ActionClassifier、TaskChangePlanner、NightSummaryGenerator の全 LLM 呼び出しへ共通注入した
 - 対象範囲を前日 22:00 から実行時点までに統一し、同一フォーマットの会話コンテキストを再利用するようにした
 - LINE受信時の会話保存失敗では LLM 実行へ進まず、安全停止するようにした
+
+### `STEP10.md`
+- Google Drive ルートの `SOUL.md` / `USER.md` を全 LLM 呼び出しごとに毎回読み込み、OpenAI クライアントで共通注入する実装を追加した
+- 注入順は `SOUL.md` → `USER.md` を固定し、その後段で既存の会話履歴と最新入力を扱う構成に統一した
+- 共通クライアント経由のため、既存の ActionClassifier、TaskChangePlanner、NightSummaryGenerator すべてへ一括適用される
 
 ### `STEP13.md`
 - Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した

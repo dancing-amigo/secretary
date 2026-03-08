@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
+import { readSoulMarkdown, readUserMarkdown } from './googleDriveState.js';
 
 const chatApi = axios.create({
   baseURL: config.openai.baseUrl,
@@ -34,6 +35,26 @@ function extractStructuredContent(response) {
   return content;
 }
 
+async function buildInjectedSystemPrompt(systemPrompt) {
+  const [soulMarkdown, userMarkdown] = await Promise.all([
+    readSoulMarkdown(),
+    readUserMarkdown()
+  ]);
+
+  return [
+    '以下の順序で与える固定コンテキストを、以後の全応答で必ず優先して参照してください。',
+    '',
+    '[SOUL.md]',
+    String(soulMarkdown || '').trim(),
+    '',
+    '[USER.md]',
+    String(userMarkdown || '').trim(),
+    '',
+    '[SYSTEM INSTRUCTION]',
+    String(systemPrompt || '').trim()
+  ].join('\n');
+}
+
 export async function createTextOutput({ model, systemPrompt, userPrompt }) {
   const configError = llmConfigError();
   if (configError) {
@@ -41,10 +62,11 @@ export async function createTextOutput({ model, systemPrompt, userPrompt }) {
   }
 
   try {
+    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
     const response = await chatApi.post('/chat/completions', {
       model,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: injectedSystemPrompt },
         { role: 'user', content: userPrompt }
       ]
     }, {
@@ -67,10 +89,11 @@ export async function createStructuredOutput({ model, schemaName, schema, system
   }
 
   try {
+    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
     const response = await chatApi.post('/chat/completions', {
       model,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: injectedSystemPrompt },
         { role: 'user', content: userPrompt }
       ],
       response_format: {

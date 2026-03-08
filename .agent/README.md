@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP9.md`
-- 当日会話履歴を全 LLM 呼び出しへ共通注入する計画
-- 対象は ActionClassifier、TaskChangePlanner、NightSummaryGenerator
-- 前日 22:00 からの履歴を共通フォーマットで渡し、取得失敗時は安全停止する
-
 ### `STEP10.md`
 - Google Drive ルートの `SOUL.md` / `USER.md` を全 LLM 呼び出しの先頭に毎回注入する設計
 - 順序は `SOUL.md` → `USER.md` → 当日会話履歴 → 最新入力で固定
@@ -77,6 +72,11 @@
 - `notifyOnEnd` 対象 event の終了後未完了状態に対し、15 分ごとに自己再スケジュールする再通知を実装した
 - 再通知は delivery 時に最新 event を確認し、未完了なら送信して次の 1 本だけを予約する
 - 完了、削除、`endTime` 変更、22:00 到達で再通知チェーンを停止する
+
+### `STEP9.md`
+- 当日会話履歴を ActionClassifier、TaskChangePlanner、NightSummaryGenerator の全 LLM 呼び出しへ共通注入した
+- 対象範囲を前日 22:00 から実行時点までに統一し、同一フォーマットの会話コンテキストを再利用するようにした
+- LINE受信時の会話保存失敗では LLM 実行へ進まず、安全停止するようにした
 
 ### `STEP13.md`
 - Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した

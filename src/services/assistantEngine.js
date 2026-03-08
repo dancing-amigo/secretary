@@ -1,7 +1,6 @@
 import { randomUUID } from 'crypto';
 import { config } from '../config.js';
 import {
-  getLatestSentNotificationBefore,
   getNotificationRecord,
   readConversationTurns,
   updateNotificationRecord,
@@ -93,7 +92,7 @@ function getLocalDateContext(date = new Date()) {
   };
 }
 
-function buildActionPrompt({ text, dateKey, localTime, timeZone, agendaContext }) {
+function buildActionPrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext }) {
   return [
     'あなたは個人向けLINE秘書のアクション分類器です。',
     `現在のローカル日付: ${dateKey}`,
@@ -109,6 +108,9 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, agendaContext }
     '可能なら、今日の予定状況を踏まえて解釈してください。',
     'この段階では変更計画の作成はしません。',
     'JSONオブジェクトのみを返してください。',
+    '',
+    '当日会話履歴:',
+    conversationText,
     '',
     '今日の予定一覧:',
     agendaContext,
@@ -186,6 +188,44 @@ function formatConversationTimestamp(value) {
   const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:[+-]\d{2}:\d{2}|Z)?$/);
   if (!match) return normalized;
   return `${match[1]} ${match[2]}`;
+}
+
+function shiftDateKey(dateKey, days) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function buildConversationWindow({ dateKey, localTime, timeZone }) {
+  return {
+    since: getUtcIsoForLocalDateTime({
+      dateKey: shiftDateKey(dateKey, -1),
+      time: '22:00:00',
+      timeZone
+    }),
+    until: getUtcIsoForLocalDateTime({
+      dateKey,
+      time: localTime,
+      timeZone
+    })
+  };
+}
+
+async function loadConversationContext({ userId, dateKey, localTime, timeZone }) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    throw new Error('会話履歴の取得に必要な userId がありません。');
+  }
+
+  const { since, until } = buildConversationWindow({ dateKey, localTime, timeZone });
+  const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
+
+  return {
+    since,
+    until,
+    turns,
+    text: formatConversationTurns(turns)
+  };
 }
 
 function formatAgendaEventsForSummary(events) {
@@ -304,7 +344,7 @@ function buildNewAgendaEventIdCandidates(count = 10) {
   return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
 }
 
-function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaContext, newEventIds, userId }) {
+function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext, newEventIds, userId }) {
   return [
     'あなたは今日の Google Calendar event 一覧の最終状態とLINE返信文を同時に作る役割です。',
     `現在のローカル日付: ${dateKey}`,
@@ -345,6 +385,9 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaCo
     '新規 event 用の id 候補:',
     ...newEventIds.map((id) => `- ${id}`),
     '',
+    '当日会話履歴:',
+    conversationText,
+    '',
     '現在の当日予定一覧:',
     agendaContext,
     '',
@@ -353,27 +396,34 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, agendaCo
   ].join('\n');
 }
 
-async function classifyAction({ text, dateContext, agendaContext }) {
+async function classifyAction({ text, dateContext, conversationContext, agendaContext }) {
   return createStructuredOutput({
     model: config.openai.actionModel,
     schemaName: 'action_plan',
     schema: ACTION_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildActionPrompt({ text, ...dateContext, agendaContext })
+    userPrompt: buildActionPrompt({ text, ...dateContext, conversationText: conversationContext.text, agendaContext })
   });
 }
 
-async function rewriteAgendaEvents({ text, dateContext, agendaContext, newEventIds, userId }) {
+async function rewriteAgendaEvents({ text, dateContext, conversationContext, agendaContext, newEventIds, userId }) {
   return createStructuredOutput({
     model: config.openai.taskModel,
     schemaName: 'agenda_rewrite',
     schema: AGENDA_REWRITE_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildAgendaRewritePrompt({ text, ...dateContext, agendaContext, newEventIds, userId })
+    userPrompt: buildAgendaRewritePrompt({
+      text,
+      ...dateContext,
+      conversationText: conversationContext.text,
+      agendaContext,
+      newEventIds,
+      userId
+    })
   });
 }
 
-async function generateNightSummary({ dateKey, localTime, timeZone, userId, turns, events, since, until }) {
+async function generateNightSummary({ dateKey, localTime, timeZone, conversationContext, events }) {
   const raw = await createStructuredOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     schemaName: 'night_summary',
@@ -383,7 +433,7 @@ async function generateNightSummary({ dateKey, localTime, timeZone, userId, turn
       dateKey,
       localTime,
       timeZone,
-      conversationText: formatConversationTurns(turns),
+      conversationText: conversationContext.text,
       agendaText: formatAgendaEventsForSummary(events)
     })
   });
@@ -500,11 +550,12 @@ export async function processUserMessage({ userId, text }) {
   }
 
   const dateContext = getLocalDateContext();
+  const conversationContext = await loadConversationContext({ userId, ...dateContext });
   const executionContext = createExecutionContext(dateContext);
   const calendarSnapshot = await executionContext.getCalendarSnapshot('line_message');
   const agendaContext = formatAgendaContext(calendarSnapshot);
 
-  const actionPlan = await classifyAction({ text: rawText, dateContext, agendaContext });
+  const actionPlan = await classifyAction({ text: rawText, dateContext, conversationContext, agendaContext });
 
   if (actionPlan.action === 'modify_events') {
     const currentEvents = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
@@ -513,6 +564,7 @@ export async function processUserMessage({ userId, text }) {
     const rewriteResult = await rewriteAgendaEvents({
       text: rawText,
       dateContext,
+      conversationContext,
       userId,
       agendaContext,
       newEventIds
@@ -589,32 +641,17 @@ export async function runMorningPlan() {
 }
 
 export async function prepareNightReview({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const conversationContext = await loadConversationContext({ userId, dateKey, localTime, timeZone });
   const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('night_review');
   const existing = await getNotificationRecord({ slot: 'night', dateKey });
-
-  const previousSummary = await getLatestSentNotificationBefore({ slot: 'night', dateKey });
-  const since = previousSummary?.sentAt || getUtcIsoForLocalDateTime({
-    dateKey,
-    time: '00:00:00',
-    timeZone
-  });
-  const until = getUtcIsoForLocalDateTime({
-    dateKey,
-    time: localTime,
-    timeZone
-  });
-  const turns = await readConversationTurns({ userId, since, until });
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
   const summary = await generateNightSummary({
     dateKey,
     localTime,
     timeZone,
-    userId,
-    turns,
+    conversationContext,
     events,
-    since,
-    until
   });
 
   await updateNotificationRecord({
@@ -623,9 +660,9 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
     updates: {
       summaryGeneratedAt: new Date().toISOString(),
       summarySource: {
-        since,
-        until,
-        conversationCount: turns.length,
+        since: conversationContext.since,
+        until: conversationContext.until,
+        conversationCount: conversationContext.turns.length,
         eventCount: events.length
       }
     }

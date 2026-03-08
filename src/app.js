@@ -33,9 +33,7 @@ app.post('/webhook/line', express.raw({ type: '*/*' }), async (req, res) => {
     const userText = event.message.text || '';
 
     try {
-      try {
-        await appendConversationTurn({ userId, role: 'user', text: userText });
-      } catch {}
+      await appendConversationTurn({ userId, role: 'user', text: userText });
 
       const replyText = await processUserMessage({ userId, text: userText });
       await replyMessage(event.replyToken, replyText);

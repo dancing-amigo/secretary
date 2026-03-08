@@ -4,7 +4,7 @@ import { readSoulMarkdown, readUserMarkdown } from './googleDriveState.js';
 
 const chatApi = axios.create({
   baseURL: config.openai.baseUrl,
-  timeout: 30000
+  timeout: config.openai.timeoutMs
 });
 
 function llmConfigError() {
@@ -18,7 +18,42 @@ function toReadableApiError(error) {
     return new Error(String(apiMessage));
   }
 
+  if (isTimeoutError(error)) {
+    return new Error('応答生成に時間がかかりすぎました。少し置いてからもう一度送ってください。');
+  }
+
   return error instanceof Error ? error : new Error(String(error || 'Unknown API error'));
+}
+
+function isTimeoutError(error) {
+  return error?.code === 'ECONNABORTED' || /timeout/i.test(String(error?.message || ''));
+}
+
+function isRetryableApiError(error) {
+  const status = Number(error?.response?.status || 0);
+  return isTimeoutError(error) || status === 429 || status >= 500;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postChatCompletion(body, attempt = 0) {
+  try {
+    return await chatApi.post('/chat/completions', body, {
+      headers: {
+        Authorization: `Bearer ${config.openai.apiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+  } catch (error) {
+    if (attempt >= 1 || !isRetryableApiError(error)) {
+      throw error;
+    }
+
+    await wait(800);
+    return postChatCompletion(body, attempt + 1);
+  }
 }
 
 function extractStructuredContent(response) {
@@ -63,17 +98,12 @@ export async function createTextOutput({ model, systemPrompt, userPrompt }) {
 
   try {
     const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
-    const response = await chatApi.post('/chat/completions', {
+    const response = await postChatCompletion({
       model,
       messages: [
         { role: 'system', content: injectedSystemPrompt },
         { role: 'user', content: userPrompt }
       ]
-    }, {
-      headers: {
-        Authorization: `Bearer ${config.openai.apiKey}`,
-        'Content-Type': 'application/json'
-      }
     });
 
     return extractStructuredContent(response);
@@ -90,7 +120,7 @@ export async function createStructuredOutput({ model, schemaName, schema, system
 
   try {
     const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
-    const response = await chatApi.post('/chat/completions', {
+    const response = await postChatCompletion({
       model,
       messages: [
         { role: 'system', content: injectedSystemPrompt },
@@ -103,11 +133,6 @@ export async function createStructuredOutput({ model, schemaName, schema, system
           strict: true,
           schema
         }
-      }
-    }, {
-      headers: {
-        Authorization: `Bearer ${config.openai.apiKey}`,
-        'Content-Type': 'application/json'
       }
     });
 

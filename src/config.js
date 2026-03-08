@@ -31,6 +31,12 @@ function normalizeRetentionDays(rawValue, fallback) {
   return value;
 }
 
+function normalizeTimeoutMs(rawValue, fallback) {
+  const value = Number.parseInt(String(rawValue || "").trim(), 10);
+  if (!Number.isFinite(value) || value < 1000) return fallback;
+  return value;
+}
+
 export const config = {
   port: Number(process.env.PORT || 8787),
   app: {
@@ -51,6 +57,7 @@ export const config = {
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
     baseUrl: process.env.OPENAI_BASE_URL || "https://api.openai.com/v1",
+    timeoutMs: normalizeTimeoutMs(process.env.OPENAI_TIMEOUT_MS, 90000),
     actionModel:
       process.env.OPENAI_ACTION_MODEL ||
       process.env.OPENAI_MODEL ||

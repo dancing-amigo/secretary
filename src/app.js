@@ -42,6 +42,11 @@ app.post('/webhook/line', express.raw({ type: '*/*' }), async (req, res) => {
       } catch {}
     } catch (e) {
       const errText = String(e.message || e || 'error');
+      console.error('[line-webhook] failed', {
+        userId,
+        userText,
+        error: errText
+      });
       await replyMessage(event.replyToken, errText);
       try {
         await appendConversationTurn({ userId, role: 'assistant', text: errText });

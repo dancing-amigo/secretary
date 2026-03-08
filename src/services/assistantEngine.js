@@ -433,6 +433,33 @@ function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, conversation
   ].join('\n');
 }
 
+function buildOthersReplyPrompt({ text, dateKey, localTime, timeZone, conversationText }) {
+  return [
+    'あなたは個人向けLINE秘書の対話応答役です。',
+    `現在のローカル日付: ${dateKey}`,
+    `現在のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    '',
+    '役割:',
+    '- ユーザーの最新メッセージに対して、そのまま送れる自然な日本語の返信文を1本だけ作る',
+    '- 雑談、質問、相談、確認依頼、感情共有などに対して、会話文脈を踏まえて答える',
+    '',
+    'ルール:',
+    '- JSON ではなく、完成済みの返信文本文だけを返す',
+    '- 既知の文脈がある場合は反映する。無理に話を広げすぎない',
+    '- 不明なことは断定しない。必要なら短く確認を求める',
+    '- 今日の予定更新、一覧取得、SOUL.md/USER.md 編集など、別アクションが必要なことを実行したふりはしない',
+    '- 長すぎる説明や不自然な定型文を避ける',
+    '- 箇条書きや見出しは基本使わず、会話として自然な文面を優先する',
+    '',
+    '当日会話履歴:',
+    conversationText,
+    '',
+    '最新のユーザーメッセージ:',
+    text
+  ].join('\n');
+}
+
 function buildNewAgendaEventIdCandidates(count = 10) {
   return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
 }
@@ -655,6 +682,30 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, conversat
   };
 }
 
+function normalizeOthersMessage(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .slice(0, 5000);
+
+  return normalized || 'どう返すのがよいか少し迷いました。必要ならもう少し詳しく教えてください。';
+}
+
+async function generateOthersReply({ text, dateContext, conversationContext }) {
+  const output = await createTextOutput({
+    model: config.openai.taskModel,
+    systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+    userPrompt: buildOthersReplyPrompt({
+      text,
+      ...dateContext,
+      conversationText: conversationContext.text
+    })
+  });
+
+  return normalizeOthersMessage(output);
+}
+
 function formatAgendaList(events) {
   if (events.length === 0) {
     return '今日の予定はありません。';
@@ -860,7 +911,11 @@ export async function processUserMessage({ userId, text }) {
   }
 
   if (actionPlan.action === 'others') {
-    return 'OK';
+    return generateOthersReply({
+      text: rawText,
+      dateContext,
+      conversationContext
+    });
   }
 
   throw new Error('アクション判定に失敗しました。もう一度送ってください。');

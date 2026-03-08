@@ -893,6 +893,40 @@ export async function readUserMarkdown() {
   return readRootTextFile(USER_FILE_NAME);
 }
 
+export async function writeSoulMarkdown(content) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: SOUL_FILE_NAME
+  });
+  if (!fileId) {
+    throw new Error(`Google Drive root file not found: ${SOUL_FILE_NAME}`);
+  }
+
+  await writeDriveTextFile(fileId, String(content || ''), 'text/markdown');
+}
+
+export async function writeUserMarkdown(content) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: USER_FILE_NAME
+  });
+  if (!fileId) {
+    throw new Error(`Google Drive root file not found: ${USER_FILE_NAME}`);
+  }
+
+  await writeDriveTextFile(fileId, String(content || ''), 'text/markdown');
+}
+
 export async function readConversationTurns({ userId, since, until }) {
   const configError = driveStateConfigError();
   if (configError) {

@@ -16,11 +16,6 @@
 
 ## 進行中プラン一覧
 
-### `STEP11.md`
-- `SOUL.md` / `USER.md` を編集する専用アクション `edit_soul` / `edit_user` を追加する計画
-- ActionClassifier を 5 分類へ拡張する
-- 編集用 LLM が変更計画、実行、結果出力まで一貫して担当する前提
-
 ### `STEP12.md`
 - ActionClassifier を複数アクション出力へ拡張し、最終返信を OutputComposer に統一する計画
 - 複合意図を 1 ターンで順次処理できるようにする
@@ -77,6 +72,11 @@
 - Google Drive ルートの `SOUL.md` / `USER.md` を全 LLM 呼び出しごとに毎回読み込み、OpenAI クライアントで共通注入する実装を追加した
 - 注入順は `SOUL.md` → `USER.md` を固定し、その後段で既存の会話履歴と最新入力を扱う構成に統一した
 - 共通クライアント経由のため、既存の ActionClassifier、TaskChangePlanner、NightSummaryGenerator すべてへ一括適用される
+
+### `STEP11.md`
+- `SOUL.md` / `USER.md` を編集する専用アクション `edit_soul` / `edit_user` を追加した
+- ActionClassifier を 5 分類へ拡張し、編集指示と単なる相談を分ける優先順位をプロンプトへ明記した
+- 編集用 LLM が会話履歴と両ファイル内容を入力に、更新後全文生成、Google Drive 反映、ユーザー向け結果出力まで一貫して担当する実装を追加した
 
 ### `STEP13.md`
 - Google Calendar event を唯一の正本にし、Google Drive の当日 task ファイル依存を主要フローから外した

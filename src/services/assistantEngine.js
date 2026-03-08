@@ -3,8 +3,12 @@ import { config } from '../config.js';
 import {
   getNotificationRecord,
   readConversationTurns,
+  readSoulMarkdown,
+  readUserMarkdown,
   updateNotificationRecord,
-  upsertDailyLog
+  upsertDailyLog,
+  writeSoulMarkdown,
+  writeUserMarkdown
 } from './googleDriveState.js';
 import { pullGoogleCalendarEventsForDate, reconcileAgendaEventsForDate } from './googleCalendarSync.js';
 import { reconcileReminderSchedulesForDate } from './eventReminders.js';
@@ -17,9 +21,23 @@ const ACTION_SCHEMA = {
   properties: {
     action: {
       type: 'string',
-      enum: ['modify_events', 'list_events', 'others']
+      enum: ['modify_events', 'list_events', 'edit_soul', 'edit_user', 'others']
     },
     reason: { type: 'string' }
+  }
+};
+
+const PROFILE_EDIT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['outcome', 'updatedContent', 'message'],
+  properties: {
+    outcome: {
+      type: 'string',
+      enum: ['updated', 'clarify']
+    },
+    updatedContent: { type: 'string' },
+    message: { type: 'string' }
   }
 };
 
@@ -99,10 +117,19 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, conversationTex
     `現在のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
     '',
-    '次の3つから必ず1つだけ選んでください。',
+    '次の5つから必ず1つだけ選んでください。',
     '- modify_events: ユーザーが今日の予定を追加・編集・削除・完了報告・補足更新したい意図の発話。',
     '- list_events: ユーザーが今日の予定一覧、やること一覧、行動一覧を知りたい意図の発話。',
+    '- edit_soul: AIの人格・口調・振る舞いルールとして SOUL.md を実際に追加・修正・削除したい明示的な依頼。',
+    '- edit_user: ユーザー属性・嗜好・前提情報として USER.md を実際に追加・修正・削除したい明示的な依頼。',
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
+    '',
+    '優先順位:',
+    '- 今日の予定を変える依頼は modify_events を最優先する。',
+    '- 今日の予定一覧を知りたい依頼は list_events を優先する。',
+    '- SOUL.md / USER.md についての相談、説明要求、感想確認だけなら edit_* ではなく others にする。',
+    '- SOUL.md / USER.md を「更新して」「追記して」「このルールを覚えて」など実際に変更させる依頼だけを edit_* にする。',
+    '- SOUL.md 対象なら edit_soul、USER.md 対象なら edit_user。両方に見えるが主対象が不明なら others にする。',
     '',
     '自然な日本語として広く解釈してください。',
     '可能なら、今日の予定状況を踏まえて解釈してください。',
@@ -459,6 +486,53 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversa
   ].join('\n');
 }
 
+function buildProfileEditPrompt({
+  targetFile,
+  userMessage,
+  conversationText,
+  soulMarkdown,
+  userMarkdown,
+  currentContent
+}) {
+  return [
+    `あなたは ${targetFile} の編集実行役です。`,
+    '',
+    'JSON オブジェクトで返してください。',
+    'outcome:',
+    '- updated: 安全に更新内容を確定できる場合',
+    '- clarify: 指示が曖昧で確定更新できない場合',
+    'updatedContent:',
+    '- updated のときは更新後ファイル全文',
+    '- clarify のときは空文字でよい',
+    'message:',
+    '- updated のときは、対象ファイル名と主な変更点を短く伝える完成済みの返信文',
+    '- clarify のときは、確認したい内容を短い日本語で伝える',
+    '',
+    'ルール:',
+    `- 更新対象は ${targetFile} だけです。もう片方のファイルは変更しません。`,
+    '- ユーザーの依頼が明示している変更だけを反映してください。',
+    '- 現在の内容をベースに必要箇所だけを編集し、無関係な削除や全面的な書き換えは避けてください。',
+    '- Markdown として自然な構成を保ってください。',
+    '- 依頼が質問止まり、相談止まり、または変更内容が特定できない場合は clarify にしてください。',
+    '- message は長文化しすぎず、そのままLINEで返せる文面にしてください。',
+    '',
+    `[現在の ${targetFile}]`,
+    currentContent,
+    '',
+    '[参考: SOUL.md]',
+    soulMarkdown,
+    '',
+    '[参考: USER.md]',
+    userMarkdown,
+    '',
+    '当日会話履歴:',
+    conversationText,
+    '',
+    '最新のユーザー依頼:',
+    userMessage
+  ].join('\n');
+}
+
 async function classifyAction({ text, dateContext, conversationContext, agendaContext }) {
   return createStructuredOutput({
     model: config.openai.actionModel,
@@ -484,6 +558,37 @@ async function rewriteAgendaEvents({ text, dateContext, conversationContext, age
       userId
     })
   });
+}
+
+async function editProfileFile({
+  targetFile,
+  text,
+  conversationContext,
+  soulMarkdown,
+  userMarkdown
+}) {
+  const currentContent = targetFile === 'SOUL.md' ? soulMarkdown : userMarkdown;
+  return createStructuredOutput({
+    model: config.openai.taskModel,
+    schemaName: targetFile === 'SOUL.md' ? 'edit_soul_result' : 'edit_user_result',
+    schema: PROFILE_EDIT_SCHEMA,
+    systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    userPrompt: buildProfileEditPrompt({
+      targetFile,
+      userMessage: text,
+      conversationText: conversationContext.text,
+      soulMarkdown,
+      userMarkdown,
+      currentContent
+    })
+  });
+}
+
+function normalizeProfileEditContent(content) {
+  return String(content || '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .concat('\n');
 }
 
 async function generateNightSummary({ dateKey, localTime, timeZone, conversationContext, events }) {
@@ -715,6 +820,34 @@ export async function processUserMessage({ userId, text }) {
 
   if (actionPlan.action === 'list_events') {
     return formatAgendaList(Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []);
+  }
+
+  if (actionPlan.action === 'edit_soul' || actionPlan.action === 'edit_user') {
+    const [soulMarkdown, userMarkdown] = await Promise.all([
+      readSoulMarkdown(),
+      readUserMarkdown()
+    ]);
+    const targetFile = actionPlan.action === 'edit_soul' ? 'SOUL.md' : 'USER.md';
+    const editResult = await editProfileFile({
+      targetFile,
+      text: rawText,
+      conversationContext,
+      soulMarkdown,
+      userMarkdown
+    });
+
+    if (editResult.outcome === 'clarify') {
+      return String(editResult.message || '').trim() || `${targetFile} のどこを変えるか確認させてください。`;
+    }
+
+    const updatedContent = normalizeProfileEditContent(editResult.updatedContent);
+    if (targetFile === 'SOUL.md') {
+      await writeSoulMarkdown(updatedContent);
+    } else {
+      await writeUserMarkdown(updatedContent);
+    }
+
+    return String(editResult.message || '').trim() || `${targetFile} を更新しました。`;
   }
 
   if (actionPlan.action === 'others') {

@@ -83,16 +83,41 @@ async function runScheduledJob(jobName, runner) {
 export async function runMorningJob() {
   return runScheduledJob('morning', async () => {
     const snapshot = getLocalScheduleContext(config.tz);
-    const text = await runMorningPlan();
-    const out = await sendToDefaultUser(text);
     try {
-      await completeNotificationWindow({
-        slot: 'morning',
-        dateKey: snapshot.dateKey,
-        localTime: snapshot.localTime
-      });
-    } catch {}
-    return { skipped: false, ...out, ...snapshot };
+      const text = await runMorningPlan();
+      const out = await sendToDefaultUser(text);
+      const messageSentAt = new Date().toISOString();
+      try {
+        await appendConversationTurn({
+          userId: config.line.defaultUserId,
+          role: 'assistant',
+          text,
+          at: messageSentAt
+        });
+      } catch {}
+
+      try {
+        await completeNotificationWindow({
+          slot: 'morning',
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          sentAt: messageSentAt
+        });
+      } catch {}
+
+      return { skipped: false, ...out, ...snapshot };
+    } catch (error) {
+      try {
+        await failNotificationWindow({
+          slot: 'morning',
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          error
+        });
+      } catch {}
+
+      throw error;
+    }
   });
 }
 

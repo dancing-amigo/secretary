@@ -8,7 +8,7 @@ import {
 } from './googleDriveState.js';
 import { pullGoogleCalendarEventsForDate, reconcileAgendaEventsForDate } from './googleCalendarSync.js';
 import { reconcileReminderSchedulesForDate } from './eventReminders.js';
-import { createStructuredOutput } from './openaiClient.js';
+import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 
 const ACTION_SCHEMA = {
   type: 'object',
@@ -211,6 +211,21 @@ function buildConversationWindow({ dateKey, localTime, timeZone }) {
   };
 }
 
+function buildPreviousDayConversationWindow({ dateKey, timeZone }) {
+  return {
+    since: getUtcIsoForLocalDateTime({
+      dateKey: shiftDateKey(dateKey, -1),
+      time: '00:00:00',
+      timeZone
+    }),
+    until: getUtcIsoForLocalDateTime({
+      dateKey,
+      time: '00:00:00',
+      timeZone
+    })
+  };
+}
+
 async function loadConversationContext({ userId, dateKey, localTime, timeZone }) {
   const normalizedUserId = String(userId || '').trim();
   if (!normalizedUserId) {
@@ -218,6 +233,23 @@ async function loadConversationContext({ userId, dateKey, localTime, timeZone })
   }
 
   const { since, until } = buildConversationWindow({ dateKey, localTime, timeZone });
+  const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
+
+  return {
+    since,
+    until,
+    turns,
+    text: formatConversationTurns(turns)
+  };
+}
+
+async function loadPreviousDayConversationContext({ userId, dateKey, timeZone }) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    throw new Error('会話履歴の取得に必要な userId がありません。');
+  }
+
+  const { since, until } = buildPreviousDayConversationWindow({ dateKey, timeZone });
   const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
 
   return {
@@ -340,6 +372,37 @@ function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
   ].join('\n');
 }
 
+function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
+  return [
+    'あなたは個人向けLINE秘書の朝メッセージ生成役です。',
+    `対象日付: ${dateKey}`,
+    `送信直前のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    '',
+    '目的:',
+    '- ユーザーが朝に読みやすい、短く自然な日本語メッセージを1本だけ作る',
+    '- 前日会話の文脈を踏まえつつ、今日の予定を必要に応じて自然に触れる',
+    '- ユーザーの気分が少し上向くような言い方を選ぶ',
+    '',
+    '文面方針:',
+    '- JSON ではなく、そのまま送れる完成済みの短いメッセージ本文だけを返す',
+    '- 毎回同じ型や同じ言い回しに寄せすぎない。自然に少しずつ変化を出す',
+    '- 挨拶、予定確認、気遣い、軽い後押しなどは必要に応じて柔軟に組み合わせる',
+    '- ただし長くしすぎず、朝に一目で読める簡潔さを優先する',
+    '- 予定がある日は、予定一覧の丸写しではなく重要な流れだけ短く触れる',
+    '- 予定がない日は、そのことを自然に伝えるか、あえて触れなくてもよい',
+    '- 前日会話に接続できるなら反映する。無理に触れない',
+    '- プレッシャーが強すぎる言い方、説教調、根拠のない断定は避ける',
+    '- 絵文字、見出し、箇条書き、過度な定型フォーマットは使わない',
+    '',
+    '前日会話履歴:',
+    conversationText,
+    '',
+    '今日の予定一覧:',
+    agendaText
+  ].join('\n');
+}
+
 function buildNewAgendaEventIdCandidates(count = 10) {
   return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
 }
@@ -447,6 +510,34 @@ async function generateNightSummary({ dateKey, localTime, timeZone, conversation
       events,
       extraNotes
     })
+  };
+}
+
+function normalizeMorningMessage(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .slice(0, 5000);
+
+  return normalized || 'ボス、おはようございます！今日も元気に頑張っていきましょう！';
+}
+
+async function generateMorningGreeting({ dateKey, localTime, timeZone, conversationContext, events }) {
+  const text = await createTextOutput({
+    model: config.openai.summaryModel || config.openai.taskModel,
+    systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+    userPrompt: buildMorningGreetingPrompt({
+      dateKey,
+      localTime,
+      timeZone,
+      conversationText: conversationContext.text,
+      agendaText: formatAgendaEventsForSummary(events)
+    })
+  });
+
+  return {
+    messageText: normalizeMorningMessage(text)
   };
 }
 
@@ -636,8 +727,20 @@ export async function processUserMessage({ userId, text }) {
 export async function runMorningPlan() {
   const dateContext = getLocalDateContext();
   const executionContext = createExecutionContext(dateContext);
-  await executionContext.getCalendarSnapshot('morning_plan');
-  return '朝です';
+  const conversationContext = await loadPreviousDayConversationContext({
+    userId: config.line.defaultUserId,
+    dateKey: dateContext.dateKey,
+    timeZone: dateContext.timeZone
+  });
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('morning_plan');
+  const greeting = await generateMorningGreeting({
+    dateKey: dateContext.dateKey,
+    localTime: dateContext.localTime,
+    timeZone: dateContext.timeZone,
+    conversationContext,
+    events: Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []
+  });
+  return greeting.messageText;
 }
 
 export async function prepareNightReview({ userId, dateKey, localTime, timeZone = config.tz }) {

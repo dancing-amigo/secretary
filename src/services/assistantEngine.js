@@ -53,7 +53,7 @@ const NIGHT_SUMMARY_SCHEMA = {
   }
 };
 
-const AGENDA_REWRITE_SCHEMA = {
+export const AGENDA_REWRITE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['outcome', 'events', 'message'],
@@ -67,7 +67,7 @@ const AGENDA_REWRITE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['isNew', 'title', 'status', 'notifyOnEnd', 'detail', 'allDay', 'startTime', 'endTime'],
+        required: ['id', 'isNew', 'title', 'status', 'notifyOnEnd', 'detail', 'allDay', 'startTime', 'endTime'],
         properties: {
           id: { type: 'string' },
           isNew: { type: 'boolean' },

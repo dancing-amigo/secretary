@@ -1,7 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeAgendaEventsFromModel } from '../src/services/assistantEngine.js';
+import {
+  AGENDA_REWRITE_SCHEMA,
+  normalizeAgendaEventsFromModel
+} from '../src/services/assistantEngine.js';
+
+test('AGENDA_REWRITE_SCHEMA requires every event item property for strict mode', () => {
+  const itemSchema = AGENDA_REWRITE_SCHEMA.properties.events.items;
+  const propertyKeys = Object.keys(itemSchema.properties).sort();
+  const requiredKeys = [...itemSchema.required].sort();
+
+  assert.deepEqual(requiredKeys, propertyKeys);
+  assert.ok(requiredKeys.includes('id'));
+});
 
 test('normalizeAgendaEventsFromModel assigns app-side ids for new events', () => {
   const currentEventsById = new Map([
@@ -21,7 +33,7 @@ test('normalizeAgendaEventsFromModel assigns app-side ids for new events', () =>
       endTime: ''
     },
     {
-      id: 'hallucinated-id',
+      id: '',
       isNew: true,
       title: '新規予定',
       status: 'todo',
@@ -35,7 +47,26 @@ test('normalizeAgendaEventsFromModel assigns app-side ids for new events', () =>
 
   assert.equal(result[0].eventId, 'existing-1');
   assert.match(result[1].eventId, /^draft-event-/);
-  assert.notEqual(result[1].eventId, 'hallucinated-id');
+  assert.notEqual(result[1].eventId, '');
+});
+
+test('normalizeAgendaEventsFromModel ignores non-empty ids for new events', () => {
+  const result = normalizeAgendaEventsFromModel([
+    {
+      id: 'hallucinated-id',
+      isNew: true,
+      title: '新規予定',
+      status: 'todo',
+      notifyOnEnd: false,
+      detail: '',
+      allDay: false,
+      startTime: '12:00:00',
+      endTime: '14:00:00'
+    }
+  ], new Map());
+
+  assert.match(result[0].eventId, /^draft-event-/);
+  assert.notEqual(result[0].eventId, 'hallucinated-id');
 });
 
 test('normalizeAgendaEventsFromModel rejects missing existing ids', () => {

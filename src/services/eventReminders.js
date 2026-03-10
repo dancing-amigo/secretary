@@ -5,12 +5,14 @@ import {
   getEventScheduleRecord,
   getNotificationRecord,
   listEventScheduleRecords,
+  readConversationTurns,
   updateNotificationRecord,
   upsertEventScheduleRecord
 } from './googleDriveState.js';
 import { deleteReminderTask, createReminderTask, cloudTasksConfigError } from './cloudTasks.js';
 import { getCalendarRfc3339ForLocalDateTime, getGoogleCalendarEventById } from './googleCalendarSync.js';
 import { pushMessage } from './lineClient.js';
+import { createTextOutput } from './openaiClient.js';
 
 const END_REMINDER_INTERVAL_MINUTES = 15;
 const END_REMINDER_CUTOFF_HOUR = 22;
@@ -94,12 +96,193 @@ function formatEventScheduledAt(event, boundaryKey) {
   });
 }
 
+function parseLocalDateParts(dateKey) {
+  const match = String(dateKey || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) {
+    throw new RangeError(`Invalid local date: ${dateKey}`);
+  }
+
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: Number(match[3])
+  };
+}
+
+function shiftDateKey(dateKey, days) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const shifted = new Date(Date.UTC(year, month - 1, day + days));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function getTimeZoneOffsetMinutes(timeZone, date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    timeZoneName: 'shortOffset',
+    hour: '2-digit'
+  }).formatToParts(date);
+  const rawOffset = parts.find((part) => part.type === 'timeZoneName')?.value || 'GMT';
+  const match = rawOffset.match(/^GMT([+-])(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) return 0;
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] || 0);
+  const minutes = Number(match[3] || 0);
+  return sign * (hours * 60 + minutes);
+}
+
+function getUtcIsoForLocalDateTime({ dateKey, time, timeZone }) {
+  const { year, month, day } = parseLocalDateParts(dateKey);
+  const timeMatch = String(time || '').match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!timeMatch) {
+    throw new RangeError(`Invalid local time: ${time}`);
+  }
+
+  const hour = Number(timeMatch[1]);
+  const minute = Number(timeMatch[2]);
+  const second = Number(timeMatch[3] || 0);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  const offsetMinutes = getTimeZoneOffsetMinutes(timeZone, utcGuess);
+  return new Date(utcGuess.getTime() - offsetMinutes * 60 * 1000).toISOString();
+}
+
+function formatConversationTimestamp(value) {
+  const normalized = String(value || '').trim();
+  const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})(?:[+-]\d{2}:\d{2}|Z)?$/);
+  if (!match) return normalized;
+  return `${match[1]} ${match[2]}`;
+}
+
+function formatConversationTurns(turns) {
+  if (!Array.isArray(turns) || turns.length === 0) {
+    return '- 会話履歴なし';
+  }
+
+  return turns
+    .map((turn) => `- [${formatConversationTimestamp(turn.localAt)}] ${turn.role}: ${turn.text}`)
+    .join('\n');
+}
+
+async function loadReminderConversationContext({ userId, dateKey, localTime, timeZone }) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    return { turns: [], text: '- 会話履歴なし' };
+  }
+
+  const since = getUtcIsoForLocalDateTime({
+    dateKey: shiftDateKey(dateKey, -1),
+    time: '22:00:00',
+    timeZone
+  });
+  const until = getUtcIsoForLocalDateTime({
+    dateKey,
+    time: localTime,
+    timeZone
+  });
+  const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
+  return {
+    turns,
+    text: formatConversationTurns(turns)
+  };
+}
+
+export function buildReminderBaseMessage(event, type) {
+  if (type === 'start') {
+    return startReminderMessage(event);
+  }
+  return endReminderMessage(event);
+}
+
 function startReminderMessage(event) {
   return `「${event.title || '予定'}」の時間です。`;
 }
 
 function endReminderMessage(event) {
   return `「${event.title || '予定'}」は終了時刻です。まだ終わっていなければ対応してください。`;
+}
+
+function buildReminderReplyPrompt({ userId, type, event, dateKey, localTime, timeZone, conversationText, baseMessage }) {
+  const timeText = event.allDay
+    ? '終日'
+    : `${event.startTime || '(start?)'}-${event.endTime || '(end?)'}`;
+
+  return [
+    'あなたは個人向けLINE秘書のイベントリマインダー生成役です。',
+    `現在のユーザーID: ${userId || '(empty)'}`,
+    `対象日付: ${dateKey}`,
+    `送信直前のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    `通知種別: ${type}`,
+    '',
+    '役割:',
+    '- いま送るイベント通知を、そのまま LINE に送れる自然な日本語1本に整える',
+    '- 基本はリマインダー本文を維持しつつ、必要なときだけ短い補足を1文まで足してよい',
+    '',
+    'ルール:',
+    '- 完成済みの本文だけを返す。前置きや説明は不要',
+    '- 長くしすぎない。最大でも2文程度の短文にする',
+    '- ベースの通知意図を崩さない。開始通知なら「時間です」、終了通知なら「終了時刻です」が自然に伝わること',
+    '- 会話履歴や予定詳細から有益な一言があるときだけ短く足す。無理に足さない',
+    '- 新しい約束や未確認の事実を作らない',
+    '- 箇条書き、見出し、絵文字は使わない',
+    '',
+    'ベース通知文:',
+    baseMessage,
+    '',
+    '対象イベント:',
+    `- title: ${event.title || '予定'}`,
+    `- time: ${timeText}`,
+    `- detail: ${event.detail || '(なし)'}`,
+    `- status: ${event.status || '(unknown)'}`,
+    '',
+    '当日の会話履歴:',
+    conversationText
+  ].join('\n');
+}
+
+export function normalizeReminderMessage(value, fallback) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .slice(0, 5000);
+
+  return normalized || fallback;
+}
+
+async function generateReminderMessage({ event, type, scheduledAt, userId }) {
+  const fallback = buildReminderBaseMessage(event, type);
+  const dateKey = extractDateKey(type === 'start' ? event.start : event.end) || extractDateKey(event.start);
+  const localTime = formatLocalTimeInZone(scheduledAt, config.tz) || formatLocalTimeInZone(new Date().toISOString(), config.tz);
+  const conversationContext = dateKey
+    ? await loadReminderConversationContext({ userId, dateKey, localTime, timeZone: config.tz })
+    : { text: '- 会話履歴なし' };
+
+  try {
+    const output = await createTextOutput({
+      model: config.openai.summaryModel || config.openai.taskModel,
+      systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+      userPrompt: buildReminderReplyPrompt({
+        userId,
+        type,
+        event,
+        dateKey: dateKey || '(unknown)',
+        localTime,
+        timeZone: config.tz,
+        conversationText: conversationContext.text,
+        baseMessage: fallback
+      })
+    });
+    return normalizeReminderMessage(output, fallback);
+  } catch (error) {
+    console.error('[event-reminders] llm generation failed', {
+      eventId: event?.eventId || '',
+      type,
+      userId,
+      error: String(error?.message || error)
+    });
+    return fallback;
+  }
 }
 
 async function sendReminderMessage(text) {
@@ -377,7 +560,13 @@ export async function runEventReminderDelivery(rawPayload) {
       return { ok: true, skipped: true, reason: 'start conditions not met', payload };
     }
 
-    await sendReminderMessage(startReminderMessage(event));
+    const text = await generateReminderMessage({
+      event,
+      type: 'start',
+      scheduledAt: payload.scheduledAt,
+      userId: config.line.defaultUserId
+    });
+    await sendReminderMessage(text);
     await markReminderSent({ ...payload, dateKey });
     if (record) {
       await clearStartScheduleIfMatches(record, payload.scheduledAt);
@@ -406,7 +595,13 @@ export async function runEventReminderDelivery(rawPayload) {
     return { ok: true, skipped: true, reason: 'end conditions not met', payload };
   }
 
-  await sendReminderMessage(endReminderMessage(event));
+  const text = await generateReminderMessage({
+    event,
+    type: payload.type,
+    scheduledAt: payload.scheduledAt,
+    userId: config.line.defaultUserId
+  });
+  await sendReminderMessage(text);
   await markReminderSent({ ...payload, dateKey });
   if (record) {
     await scheduleNextEndRepeat({

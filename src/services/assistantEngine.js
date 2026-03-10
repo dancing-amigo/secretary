@@ -53,6 +53,8 @@ const NIGHT_SUMMARY_SCHEMA = {
   }
 };
 
+const NIGHT_X_POST_MAX_LENGTH = 280;
+
 export const AGENDA_REWRITE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -376,6 +378,33 @@ function formatNightSummaryLog({ events, extraNotes, calendarSyncError }) {
   ].join('\n');
 }
 
+function buildNightXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
+  return [
+    'あなたは秘書アカウント本人として、Xに投稿する日次ポストを作成します。',
+    `対象日付: ${dateKey}`,
+    `投稿時点のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    '',
+    '役割:',
+    '- ボス本人ではなく秘書として、外部に向けて今日の活動を短く報告する',
+    '- 「今日ボスは何をやったか」「まだ残っていること」「印象的な出来事」があれば自然に触れる',
+    '',
+    '出力ルール:',
+    '- 完成済みの日本語ポスト本文だけを返す',
+    '- 1投稿分の短文にする',
+    '- 断定しすぎず、会話と予定から読み取れる範囲だけを書く',
+    '- 箇条書き、見出し、絵文字、過剰なハッシュタグは使わない',
+    '- 秘書らしい観察口調で、少し人間味はあってよいが長くしない',
+    '- 文字数はできれば220文字以内、最大でも280文字以内',
+    '',
+    '当日の会話履歴:',
+    conversationText,
+    '',
+    '当日のevent一覧:',
+    agendaText
+  ].join('\n');
+}
+
 function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
   return [
     'あなたは個人向けLINE秘書の日次サマリー生成役です。',
@@ -658,6 +687,37 @@ function normalizeMorningMessage(value) {
   return normalized || 'ボス、おはようございます！今日も元気に頑張っていきましょう！';
 }
 
+function sliceToCodePointLimit(value, limit) {
+  return Array.from(String(value || '')).slice(0, limit).join('');
+}
+
+export function normalizeXPostText(value) {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^["'「]+/, '')
+    .replace(/["'」]+$/, '')
+    .trim();
+  return sliceToCodePointLimit(normalized, NIGHT_X_POST_MAX_LENGTH);
+}
+
+export function buildXMentionSuffix(username = config.x.mentionUsername) {
+  const normalized = String(username || '').trim().replace(/^@+/, '');
+  return normalized ? ` @${normalized}` : '';
+}
+
+export function appendXMention(text, username = config.x.mentionUsername) {
+  const body = String(text || '').trim();
+  const suffix = buildXMentionSuffix(username);
+  if (!body) return suffix.trim();
+  if (!suffix) return sliceToCodePointLimit(body, NIGHT_X_POST_MAX_LENGTH);
+  const allowedBodyLength = Math.max(0, NIGHT_X_POST_MAX_LENGTH - Array.from(suffix).length);
+  const trimmedBody = sliceToCodePointLimit(body, allowedBodyLength).trim();
+  return `${trimmedBody}${suffix}`.trim();
+}
+
 async function generateMorningGreeting({ dateKey, localTime, timeZone, conversationContext, events }) {
   const text = await createTextOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
@@ -674,6 +734,32 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, conversat
   return {
     messageText: normalizeMorningMessage(text)
   };
+}
+
+export async function generateNightXPostText({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const conversationContext = await loadConversationContext({ userId, dateKey, localTime, timeZone });
+  const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('night_x_post');
+  const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
+
+  const output = await createTextOutput({
+    model: config.openai.summaryModel || config.openai.taskModel,
+    systemPrompt: '完成済みの日本語ポスト本文だけを返してください。前置きや説明は不要です。',
+    userPrompt: buildNightXPostPrompt({
+      dateKey,
+      localTime,
+      timeZone,
+      conversationText: conversationContext.text,
+      agendaText: formatAgendaEventsForSummary(events)
+    })
+  });
+
+  const normalized = normalizeXPostText(output);
+  if (!normalized) {
+    throw new Error('失敗しました');
+  }
+
+  return appendXMention(normalized);
 }
 
 function normalizeOthersMessage(value) {

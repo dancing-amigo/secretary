@@ -7,6 +7,7 @@ import {
   failNotificationWindow
 } from './googleDriveState.js';
 import { cloudTasksConfigError, ensureDailyJobTask } from './cloudTasks.js';
+import { maybePostNightSummaryToX } from './xPosting.js';
 
 const DAILY_JOB_TIMES = {
   morning: '08:00:00',
@@ -153,7 +154,27 @@ export async function runNightJob() {
         });
       } catch {}
 
-      return { skipped: false, ...out, ...snapshot, ...review };
+      let xPost = { skipped: true, reason: 'not attempted' };
+      try {
+        xPost = await maybePostNightSummaryToX({
+          userId: config.line.defaultUserId,
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          timeZone: config.tz
+        });
+      } catch (error) {
+        console.error('[scheduler] x post attempt failed unexpectedly', {
+          dateKey: snapshot.dateKey,
+          error: String(error?.message || error)
+        });
+        xPost = {
+          skipped: false,
+          ok: false,
+          error: String(error?.message || error || 'unknown error')
+        };
+      }
+
+      return { skipped: false, ...out, ...snapshot, ...review, xPost };
     } catch (error) {
       try {
         await failNotificationWindow({

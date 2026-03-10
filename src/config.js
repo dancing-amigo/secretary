@@ -37,6 +37,14 @@ function normalizeTimeoutMs(rawValue, fallback) {
   return value;
 }
 
+function normalizeOptionalBoolean(rawValue) {
+  const normalized = String(rawValue ?? '').trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'true') return true;
+  if (normalized === 'false') return false;
+  return null;
+}
+
 export const config = {
   port: Number(process.env.PORT || 8787),
   app: {
@@ -117,6 +125,23 @@ export const config = {
     serviceAccountPrivateKey:
       process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY || "",
   },
+  x: {
+    enabled:
+      normalizeOptionalBoolean(process.env.X_ENABLED) ??
+      Boolean(
+        process.env.X_API_KEY &&
+          process.env.X_API_KEY_SECRET &&
+          process.env.X_ACCESS_TOKEN &&
+          process.env.X_ACCESS_TOKEN_SECRET
+      ),
+    apiKey: process.env.X_API_KEY || '',
+    apiKeySecret: process.env.X_API_KEY_SECRET || '',
+    accessToken: process.env.X_ACCESS_TOKEN || '',
+    accessTokenSecret: process.env.X_ACCESS_TOKEN_SECRET || '',
+    clientId: process.env.X_CLIENT_ID || '',
+    clientSecret: process.env.X_CLIENT_SECRET || '',
+    mentionUsername: process.env.X_MENTION_USERNAME || ''
+  }
 };
 
 export function assertMinimalConfig() {

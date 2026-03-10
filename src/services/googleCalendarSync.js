@@ -588,8 +588,7 @@ function formatAgendaOperationPayload(agendaEvent, dateKey) {
 export async function reconcileAgendaEventsForDate({
   dateKey,
   currentEvents,
-  nextEvents,
-  allowedNewEventIds = []
+  nextEvents
 }) {
   const configError = googleCalendarConfigError();
   if (configError) {
@@ -610,7 +609,6 @@ export async function reconcileAgendaEventsForDate({
       .filter((event) => String(event?.eventId || '').trim())
       .map((event) => [String(event.eventId || '').trim(), event])
   );
-  const allowedNewIds = new Set((Array.isArray(allowedNewEventIds) ? allowedNewEventIds : []).map((id) => String(id || '').trim()));
   const seenNextIds = new Set();
   const operations = [];
 
@@ -621,11 +619,6 @@ export async function reconcileAgendaEventsForDate({
 
     if (currentById.has(eventId)) {
       operations.push({ type: 'update', eventId, agendaEvent: event });
-      continue;
-    }
-
-    if (!allowedNewIds.has(eventId)) {
-      operations.push({ type: 'invalid', eventId, agendaEvent: event, error: 'unknown new event id' });
       continue;
     }
 
@@ -649,10 +642,6 @@ export async function reconcileAgendaEventsForDate({
 
   for (const operation of operations) {
     try {
-      if (operation.type === 'invalid') {
-        throw new Error(operation.error || 'invalid operation');
-      }
-
       if (operation.type === 'create') {
         await createAgendaEvent({ agendaEvent: operation.agendaEvent, dateKey });
         summary.succeeded += 1;

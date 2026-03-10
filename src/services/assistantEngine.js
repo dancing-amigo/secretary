@@ -67,9 +67,10 @@ const AGENDA_REWRITE_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'title', 'status', 'notifyOnEnd', 'detail', 'allDay', 'startTime', 'endTime'],
+        required: ['isNew', 'title', 'status', 'notifyOnEnd', 'detail', 'allDay', 'startTime', 'endTime'],
         properties: {
           id: { type: 'string' },
+          isNew: { type: 'boolean' },
           title: { type: 'string' },
           status: {
             type: 'string',
@@ -460,11 +461,7 @@ function buildOthersReplyPrompt({ text, dateKey, localTime, timeZone, conversati
   ].join('\n');
 }
 
-function buildNewAgendaEventIdCandidates(count = 10) {
-  return Array.from({ length: count }, () => `draft-event-${randomUUID()}`);
-}
-
-function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext, newEventIds, userId }) {
+function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext, userId }) {
   return [
     'あなたは今日の Google Calendar event 一覧の最終状態とLINE返信文を同時に作る役割です。',
     `現在のローカル日付: ${dateKey}`,
@@ -483,12 +480,13 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversa
     '- clarify のときは、確認したい内容を短い日本語で返す',
     '',
     '出力フォーマット:',
-    '{"outcome":"updated","events":[{"id":"...","title":"...","status":"todo|done","notifyOnEnd":false,"detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
+    '{"outcome":"updated","events":[{"id":"","isNew":true,"title":"...","status":"todo|done","notifyOnEnd":false,"detail":"...","allDay":true,"startTime":"","endTime":""}],"message":"..."}',
     '',
     'ルール:',
     '- 変更がない event も含めて、当日一覧の最終状態を events 配列へすべて返してください。',
-    '- 既存 event を残す場合は、その id を必ずそのまま維持してください。',
-    '- 新規 event を追加する場合は、下の新規 id 候補だけを使ってください。',
+    '- 既存 event を残す場合は isNew を false にし、その id を必ずそのまま維持してください。',
+    '- 新規 event を追加する場合は isNew を true にし、id は空文字にしてください。新規 id は後でアプリ側が自動採番します。',
+    '- 既存 event の編集・完了・維持では isNew:false、新規追加では isNew:true を使ってください。',
     '- title は短く、何の予定か分かる表現にしてください。',
     '- status は todo または done のどちらかにしてください。特に完了報告がなければ todo を使ってください。',
     '- notifyOnEnd は、終了時刻後も未完了なら通知を続けたい event のときだけ true にしてください。通常は false です。',
@@ -502,9 +500,6 @@ function buildAgendaRewritePrompt({ text, dateKey, localTime, timeZone, conversa
     '- message は自然なLINEメッセージとして、そのまま送れる形にしてください。',
     '',
     `現在のユーザーID: ${userId || '(empty)'}`,
-    '新規 event 用の id 候補:',
-    ...newEventIds.map((id) => `- ${id}`),
-    '',
     '当日会話履歴:',
     conversationText,
     '',
@@ -579,7 +574,7 @@ async function classifyAction({ text, dateContext, conversationContext, agendaCo
   });
 }
 
-async function rewriteAgendaEvents({ text, dateContext, conversationContext, agendaContext, newEventIds, userId }) {
+async function rewriteAgendaEvents({ text, dateContext, conversationContext, agendaContext, userId }) {
   return createStructuredOutput({
     model: config.openai.taskModel,
     schemaName: 'agenda_rewrite',
@@ -590,7 +585,6 @@ async function rewriteAgendaEvents({ text, dateContext, conversationContext, age
       ...dateContext,
       conversationText: conversationContext.text,
       agendaContext,
-      newEventIds,
       userId
     })
   });
@@ -752,14 +746,22 @@ function normalizeAgendaEventStatus(value) {
   return 'todo';
 }
 
-function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEventsById) {
-  const allowedNewIds = new Set(allowedNewEventIds);
+export function normalizeAgendaEventsFromModel(events, currentEventsById) {
   const normalized = [];
   const seenIds = new Set();
 
   for (const rawEvent of Array.isArray(events) ? events : []) {
-    const eventId = String(rawEvent?.id || '').trim();
-    if (!eventId || seenIds.has(eventId)) {
+    const requestedId = String(rawEvent?.id || '').trim();
+    const isNew = Boolean(rawEvent?.isNew);
+    const existing = requestedId ? currentEventsById.get(requestedId) : null;
+
+    if (!isNew && !existing) {
+      throw new Error('既存 event の id が現在の予定一覧に存在しません。');
+    }
+
+    const eventId = isNew ? `draft-event-${randomUUID()}` : requestedId;
+
+    if (seenIds.has(eventId)) {
       throw new Error('返却された event 一覧に不正な id があります。');
     }
     seenIds.add(eventId);
@@ -777,11 +779,6 @@ function normalizeAgendaEventsFromModel(events, allowedNewEventIds, currentEvent
     const endTime = allDay ? '' : normalizeFullTimeString(rawEvent.endTime);
     if (!allDay && (!startTime || !endTime || startTime >= endTime)) {
       throw new Error('時間付き event の startTime/endTime が不正です。');
-    }
-
-    const existing = currentEventsById.get(eventId);
-    if (!existing && !allowedNewIds.has(eventId)) {
-      throw new Error('新規 event の id が許可された候補に含まれていません。');
     }
 
     normalized.push({
@@ -816,31 +813,24 @@ export async function processUserMessage({ userId, text }) {
   if (actionPlan.action === 'modify_events') {
     const currentEvents = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
     const currentEventsById = new Map(currentEvents.map((event) => [String(event.eventId || '').trim(), event]));
-    const newEventIds = buildNewAgendaEventIdCandidates();
     const rewriteResult = await rewriteAgendaEvents({
       text: rawText,
       dateContext,
       conversationContext,
       userId,
-      agendaContext,
-      newEventIds
+      agendaContext
     });
 
     if (rewriteResult.outcome === 'clarify') {
       return String(rewriteResult.message || '').trim() || 'どの予定を更新するか確認させてください。';
     }
 
-    const nextEvents = normalizeAgendaEventsFromModel(
-      rewriteResult.events,
-      newEventIds,
-      currentEventsById
-    );
+    const nextEvents = normalizeAgendaEventsFromModel(rewriteResult.events, currentEventsById);
 
     const calendarSyncResult = await reconcileAgendaEventsForDate({
       dateKey: dateContext.dateKey,
       currentEvents,
-      nextEvents,
-      allowedNewEventIds: newEventIds
+      nextEvents
     });
     const syncResult = {
       enabled: calendarSyncResult.enabled,

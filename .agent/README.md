@@ -21,6 +21,11 @@
 - 朝メッセージと X 投稿は notification state の内部サマリーではなく `record/timeline/days/YYYY-MM-DD.md` を直接読む構成へ切り替える
 - close record には重複防止と実行状態に必要な最小情報だけを残し、二重管理を解消する
 
+### `STEP25.md`
+- `03:00` close ジョブで、前日分 `record/timeline/days/YYYY-MM-DD.md` を入力にした memory 更新を 1 日 1 回追加する
+- memory 更新は既存ノード更新、新規ノード作成、`node-registry.yaml` 更新、必要な双方向リンク更新まで含める
+- 失敗しても close ジョブ本体は継続し、結果は notification state と Vercel log に記録する
+
 ## 完了済みプラン一覧
 
 ### `STEP23.md`

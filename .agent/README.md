@@ -16,7 +16,10 @@
 
 ## 進行中プラン一覧
 
-- なし
+### `STEP21.md`
+- Google Drive 上の `memory/` フォルダを探索する独立 `memory` アクションの導入プラン
+- flow は `ActionClassifier -> primary 候補選定 -> primary 本文読取 -> secondary 候補選定 -> 最終返答生成` の段階型
+- 初期版は `memory` アクション単体で閉じ、primary 3 / secondary 3 / 1-hop 上限と、情報不足時に推測しない返答方針を固定する
 
 ## 完了済みプラン一覧
 

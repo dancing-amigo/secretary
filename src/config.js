@@ -45,6 +45,20 @@ function normalizeOptionalBoolean(rawValue) {
   return null;
 }
 
+function normalizeLocalTime(rawValue, fallback) {
+  const normalized = String(rawValue || '').trim();
+  if (!normalized) return fallback;
+  const match = normalized.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return fallback;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const second = Number(match[3] || 0);
+  if (hour > 23 || minute > 59 || second > 59) return fallback;
+
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
+}
+
 export const config = {
   port: Number(process.env.PORT || 8787),
   app: {
@@ -52,6 +66,11 @@ export const config = {
       process.env.APP_BASE_URL ||
       process.env.SECRETARY_BASE_URL ||
       "",
+    jobTimes: {
+      morning: normalizeLocalTime(process.env.MORNING_JOB_TIME, '08:00:00'),
+      night: normalizeLocalTime(process.env.NIGHT_JOB_TIME, '22:00:00'),
+      close: normalizeLocalTime(process.env.CLOSE_JOB_TIME, '03:00:00')
+    }
   },
   tz: normalizeTimeZone(
     process.env.APP_TIMEZONE || process.env.TZ,
@@ -61,6 +80,10 @@ export const config = {
     channelSecret: process.env.LINE_CHANNEL_SECRET || "",
     accessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || "",
     defaultUserId: process.env.LINE_DEFAULT_USER_ID || "",
+    endReminderIntervalMinutes: normalizeRetentionDays(
+      process.env.END_REMINDER_INTERVAL_MINUTES,
+      15,
+    ),
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",

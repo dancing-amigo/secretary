@@ -55,6 +55,7 @@ const NIGHT_SUMMARY_SCHEMA = {
 };
 
 const NIGHT_X_POST_MAX_LENGTH = 280;
+const BUSINESS_DAY_START_TIME = '03:00:00';
 
 export const AGENDA_REWRITE_SCHEMA = {
   type: 'object',
@@ -227,17 +228,28 @@ function formatConversationTimestamp(value) {
   return `${match[1]} ${match[2]}`;
 }
 
-function shiftDateKey(dateKey, days) {
+function compareLocalTimes(left, right) {
+  const leftParts = parseLocalTimeParts(left);
+  const rightParts = parseLocalTimeParts(right);
+  const leftSeconds = leftParts.hour * 3600 + leftParts.minute * 60 + leftParts.second;
+  const rightSeconds = rightParts.hour * 3600 + rightParts.minute * 60 + rightParts.second;
+  return leftSeconds - rightSeconds;
+}
+
+export function shiftDateKey(dateKey, days) {
   const { year, month, day } = parseLocalDateParts(dateKey);
   const shifted = new Date(Date.UTC(year, month - 1, day + days));
   return shifted.toISOString().slice(0, 10);
 }
 
-function buildConversationWindow({ dateKey, localTime, timeZone }) {
+export function buildActiveConversationWindow({ dateKey, localTime, timeZone }) {
+  const startDateKey = compareLocalTimes(localTime, BUSINESS_DAY_START_TIME) >= 0
+    ? dateKey
+    : shiftDateKey(dateKey, -1);
   return {
     since: getUtcIsoForLocalDateTime({
-      dateKey: shiftDateKey(dateKey, -1),
-      time: '22:00:00',
+      dateKey: startDateKey,
+      time: BUSINESS_DAY_START_TIME,
       timeZone
     }),
     until: getUtcIsoForLocalDateTime({
@@ -248,28 +260,27 @@ function buildConversationWindow({ dateKey, localTime, timeZone }) {
   };
 }
 
-function buildPreviousDayConversationWindow({ dateKey, timeZone }) {
+export function buildClosedBusinessDayWindow({ dateKey, timeZone }) {
   return {
     since: getUtcIsoForLocalDateTime({
-      dateKey: shiftDateKey(dateKey, -1),
-      time: '00:00:00',
+      dateKey,
+      time: BUSINESS_DAY_START_TIME,
       timeZone
     }),
     until: getUtcIsoForLocalDateTime({
-      dateKey,
-      time: '00:00:00',
+      dateKey: shiftDateKey(dateKey, 1),
+      time: BUSINESS_DAY_START_TIME,
       timeZone
     })
   };
 }
 
-async function loadConversationContext({ userId, dateKey, localTime, timeZone }) {
+async function readConversationContextForWindow({ userId, since, until }) {
   const normalizedUserId = String(userId || '').trim();
   if (!normalizedUserId) {
     throw new Error('会話履歴の取得に必要な userId がありません。');
   }
 
-  const { since, until } = buildConversationWindow({ dateKey, localTime, timeZone });
   const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
 
   return {
@@ -280,21 +291,14 @@ async function loadConversationContext({ userId, dateKey, localTime, timeZone })
   };
 }
 
-async function loadPreviousDayConversationContext({ userId, dateKey, timeZone }) {
-  const normalizedUserId = String(userId || '').trim();
-  if (!normalizedUserId) {
-    throw new Error('会話履歴の取得に必要な userId がありません。');
-  }
+async function loadConversationContext({ userId, dateKey, localTime, timeZone }) {
+  const { since, until } = buildActiveConversationWindow({ dateKey, localTime, timeZone });
+  return readConversationContextForWindow({ userId, since, until });
+}
 
-  const { since, until } = buildPreviousDayConversationWindow({ dateKey, timeZone });
-  const turns = await readConversationTurns({ userId: normalizedUserId, since, until });
-
-  return {
-    since,
-    until,
-    turns,
-    text: formatConversationTurns(turns)
-  };
+async function loadClosedBusinessDayConversationContext({ userId, dateKey, timeZone }) {
+  const { since, until } = buildClosedBusinessDayWindow({ dateKey, timeZone });
+  return readConversationContextForWindow({ userId, since, until });
 }
 
 function formatAgendaEventsForSummary(events) {
@@ -359,19 +363,7 @@ function formatEventLine(event) {
   return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}${notifyText}`;
 }
 
-function formatNightSummaryMessage({ events, extraNotes }) {
-  const lines = ['今日のイベント一覧です。', '', '【Events】'];
-  lines.push(...(events.length > 0 ? events.map((event) => formatEventLine(event)) : ['- 予定なし']));
-
-  if (extraNotes.length > 0) {
-    lines.push('', '【補足メモ】');
-    lines.push(...extraNotes.map((item) => `- ${item}`));
-  }
-
-  return lines.join('\n').slice(0, 5000);
-}
-
-function formatNightSummaryLog({ events, extraNotes, calendarSyncError }) {
+function formatCloseSummaryLog({ events, extraNotes, calendarSyncError }) {
   return [
     '### Events',
     ...(events.length > 0 ? events.map((event) => formatEventLine(event)) : ['- 予定なし']),
@@ -382,7 +374,14 @@ function formatNightSummaryLog({ events, extraNotes, calendarSyncError }) {
   ].join('\n');
 }
 
-function buildNightXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
+function formatCloseSummaryContext({ dateKey, events, extraNotes, calendarSyncError }) {
+  return [
+    `対象日付: ${dateKey}`,
+    formatCloseSummaryLog({ events, extraNotes, calendarSyncError })
+  ].join('\n\n');
+}
+
+function buildDailyXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText, summaryText }) {
   return [
     'あなたは秘書アカウント本人として、Xに投稿する日次ポストを作成します。',
     `対象日付: ${dateKey}`,
@@ -401,6 +400,9 @@ function buildNightXPostPrompt({ dateKey, localTime, timeZone, conversationText,
     '- 秘書らしい観察口調で、少し人間味はあってよいが長くしない',
     '- 文字数はできれば220文字以内、最大でも280文字以内',
     '',
+    '内部サマリー:',
+    summaryText,
+    '',
     '当日の会話履歴:',
     conversationText,
     '',
@@ -409,11 +411,11 @@ function buildNightXPostPrompt({ dateKey, localTime, timeZone, conversationText,
   ].join('\n');
 }
 
-function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
+function buildCloseSummaryPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
   return [
-    'あなたは個人向けLINE秘書の日次サマリー生成役です。',
+    'あなたは個人向けLINE秘書の日次締めサマリー生成役です。',
     `対象日付: ${dateKey}`,
-    `送信直前のローカル時刻: ${localTime}`,
+    `締め実行時のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
     '',
     '目的:',
@@ -436,7 +438,7 @@ function buildNightSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
   ].join('\n');
 }
 
-function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, conversationText, agendaText }) {
+function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, summaryText, agendaText }) {
   return [
     'あなたは個人向けLINE秘書の朝メッセージ生成役です。',
     `対象日付: ${dateKey}`,
@@ -445,7 +447,7 @@ function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, conversation
     '',
     '目的:',
     '- ユーザーが朝に読みやすい、短く自然な日本語メッセージを1本だけ作る',
-    '- 前日会話の文脈を踏まえつつ、今日の予定を必要に応じて自然に触れる',
+    '- 前日締めサマリーを踏まえつつ、今日の予定を必要に応じて自然に触れる',
     '- ユーザーの気分が少し上向くような言い方を選ぶ',
     '',
     '文面方針:',
@@ -455,12 +457,12 @@ function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, conversation
     '- ただし長くしすぎず、朝に一目で読める簡潔さを優先する',
     '- 予定がある日は、予定一覧の丸写しではなく重要な流れだけ短く触れる',
     '- 予定がない日は、そのことを自然に伝えるか、あえて触れなくてもよい',
-    '- 前日会話に接続できるなら反映する。無理に触れない',
+    '- 前日締めサマリーから自然に接続できるなら反映する。無理に触れない',
     '- プレッシャーが強すぎる言い方、説教調、根拠のない断定は避ける',
     '- 絵文字、見出し、箇条書き、過度な定型フォーマットは使わない',
     '',
-    '前日会話履歴:',
-    conversationText,
+    '前日締めサマリー:',
+    summaryText,
     '',
     '今日の予定一覧:',
     agendaText
@@ -654,13 +656,13 @@ function normalizeProfileEditContent(content) {
     .concat('\n');
 }
 
-async function generateNightSummary({ dateKey, localTime, timeZone, conversationContext, events }) {
+async function generateCloseSummary({ dateKey, localTime, timeZone, conversationContext, events, calendarSyncError = '' }) {
   const raw = await createStructuredOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     schemaName: 'night_summary',
     schema: NIGHT_SUMMARY_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
-    userPrompt: buildNightSummaryPrompt({
+    userPrompt: buildCloseSummaryPrompt({
       dateKey,
       localTime,
       timeZone,
@@ -673,10 +675,16 @@ async function generateNightSummary({ dateKey, localTime, timeZone, conversation
 
   return {
     extraNotes,
-    messageText: formatNightSummaryMessage({ events, extraNotes }),
-    logEntryMarkdown: formatNightSummaryLog({
+    summaryContextText: formatCloseSummaryContext({
+      dateKey,
       events,
-      extraNotes
+      extraNotes,
+      calendarSyncError
+    }),
+    logEntryMarkdown: formatCloseSummaryLog({
+      events,
+      extraNotes,
+      calendarSyncError
     })
   };
 }
@@ -722,7 +730,7 @@ export function appendXMention(text, username = config.x.mentionUsername) {
   return `${trimmedBody}${suffix}`.trim();
 }
 
-async function generateMorningGreeting({ dateKey, localTime, timeZone, conversationContext, events }) {
+async function generateMorningGreeting({ dateKey, localTime, timeZone, summaryText, events }) {
   const text = await createTextOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
@@ -730,7 +738,7 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, conversat
       dateKey,
       localTime,
       timeZone,
-      conversationText: conversationContext.text,
+      summaryText,
       agendaText: formatAgendaEventsForSummary(events)
     })
   });
@@ -740,21 +748,24 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, conversat
   };
 }
 
-export async function generateNightXPostText({ userId, dateKey, localTime, timeZone = config.tz }) {
-  const conversationContext = await loadConversationContext({ userId, dateKey, localTime, timeZone });
+export async function generateDailyXPostText({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const conversationContext = await loadClosedBusinessDayConversationContext({ userId, dateKey, timeZone });
   const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
-  const calendarSnapshot = await executionContext.getCalendarSnapshot('night_x_post');
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('close_x_post');
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
+  const closeRecord = await getNotificationRecord({ slot: 'close', dateKey });
+  const summaryText = String(closeRecord?.summaryContextText || '').trim() || '- 前日締めサマリーなし';
 
   const output = await createTextOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     systemPrompt: '完成済みの日本語ポスト本文だけを返してください。前置きや説明は不要です。',
-    userPrompt: buildNightXPostPrompt({
+    userPrompt: buildDailyXPostPrompt({
       dateKey,
       localTime,
       timeZone,
       conversationText: conversationContext.text,
-      agendaText: formatAgendaEventsForSummary(events)
+      agendaText: formatAgendaEventsForSummary(events),
+      summaryText
     })
   });
 
@@ -1012,38 +1023,37 @@ export async function processUserMessage({ userId, text }) {
 export async function runMorningPlan() {
   const dateContext = getLocalDateContext();
   const executionContext = createExecutionContext(dateContext);
-  const conversationContext = await loadPreviousDayConversationContext({
-    userId: config.line.defaultUserId,
-    dateKey: dateContext.dateKey,
-    timeZone: dateContext.timeZone
-  });
+  const summaryDateKey = shiftDateKey(dateContext.dateKey, -1);
+  const closeRecord = await getNotificationRecord({ slot: 'close', dateKey: summaryDateKey });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('morning_plan');
   const greeting = await generateMorningGreeting({
     dateKey: dateContext.dateKey,
     localTime: dateContext.localTime,
     timeZone: dateContext.timeZone,
-    conversationContext,
+    summaryText: String(closeRecord?.summaryContextText || '').trim() || '- 前日締めサマリーなし',
     events: Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []
   });
   return greeting.messageText;
 }
 
-export async function prepareNightReview({ userId, dateKey, localTime, timeZone = config.tz }) {
-  const conversationContext = await loadConversationContext({ userId, dateKey, localTime, timeZone });
+export async function prepareDailyClose({ userId, dateKey, localTime, timeZone = config.tz }) {
+  const conversationContext = await loadClosedBusinessDayConversationContext({ userId, dateKey, timeZone });
   const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
-  const calendarSnapshot = await executionContext.getCalendarSnapshot('night_review');
-  const existing = await getNotificationRecord({ slot: 'night', dateKey });
+  const calendarSnapshot = await executionContext.getCalendarSnapshot('daily_close');
+  const existing = await getNotificationRecord({ slot: 'close', dateKey });
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
-  const summary = await generateNightSummary({
+  const calendarSyncError = calendarSnapshot.failed ? String(calendarSnapshot.error || 'unknown error') : '';
+  const summary = await generateCloseSummary({
     dateKey,
     localTime,
     timeZone,
     conversationContext,
     events,
+    calendarSyncError
   });
 
   await updateNotificationRecord({
-    slot: 'night',
+    slot: 'close',
     dateKey,
     updates: {
       summaryGeneratedAt: new Date().toISOString(),
@@ -1052,44 +1062,36 @@ export async function prepareNightReview({ userId, dateKey, localTime, timeZone 
         until: conversationContext.until,
         conversationCount: conversationContext.turns.length,
         eventCount: events.length
-      }
+      },
+      summaryContextText: summary.summaryContextText.slice(0, 5000)
     }
   });
 
+  let logUpdated = false;
   if (!existing?.logUpdatedAt) {
     await upsertDailyLog({
       dateKey,
-      entryMarkdown: formatNightSummaryLog({
-        events,
-        extraNotes: summary.extraNotes,
-        calendarSyncError: calendarSnapshot.failed ? String(calendarSnapshot.error || 'unknown error') : ''
-      })
+      entryMarkdown: summary.logEntryMarkdown
     });
     await updateNotificationRecord({
-      slot: 'night',
+      slot: 'close',
       dateKey,
       updates: {
         logUpdatedAt: new Date().toISOString()
       }
     });
+    logUpdated = true;
   }
 
   return {
-    text: summary.messageText || '今日のサマリーを作成できませんでした。',
     reusedSummary: false,
-    logUpdated: true
+    logUpdated,
+    summaryContextText: summary.summaryContextText
   };
 }
 
-export async function runNightReview() {
-  const dateContext = getLocalDateContext();
-  const review = await prepareNightReview({
-    userId: config.line.defaultUserId,
-    dateKey: dateContext.dateKey,
-    localTime: dateContext.localTime,
-    timeZone: dateContext.timeZone
-  });
-  return review.text;
+export async function runCloseReview({ userId, dateKey, localTime, timeZone = config.tz }) {
+  return prepareDailyClose({ userId, dateKey, localTime, timeZone });
 }
 
 function createExecutionContext(dateContext) {

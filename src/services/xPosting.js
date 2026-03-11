@@ -3,7 +3,7 @@ import {
   getNotificationRecord,
   updateNotificationRecord
 } from './googleDriveState.js';
-import { appendXMention, generateNightXPostText } from './assistantEngine.js';
+import { appendXMention, generateDailyXPostText } from './assistantEngine.js';
 import { isXPostingEnabled, postTweet, xClientConfigError } from './xClient.js';
 
 export function buildNightXPostFailureNotice(username = config.x.mentionUsername) {
@@ -23,7 +23,7 @@ function serializeXErrorDetail(error) {
   return String(error?.message || error || 'unknown error').slice(0, 500);
 }
 
-export function shouldAttemptNightXPost(record) {
+export function shouldAttemptDailyXPost(record) {
   if (!record || typeof record !== 'object') return true;
   return !(
     record.xPostAttemptedAt ||
@@ -34,7 +34,7 @@ export function shouldAttemptNightXPost(record) {
   );
 }
 
-export async function maybePostNightSummaryToX({ userId, dateKey, localTime, timeZone = config.tz }) {
+export async function maybePostDailySummaryToX({ userId, dateKey, localTime, timeZone = config.tz }) {
   if (!isXPostingEnabled()) {
     return { skipped: true, reason: 'x disabled' };
   }
@@ -44,14 +44,14 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
     return { skipped: true, reason: configError };
   }
 
-  const existing = await getNotificationRecord({ slot: 'night', dateKey });
-  if (!shouldAttemptNightXPost(existing)) {
+  const existing = await getNotificationRecord({ slot: 'close', dateKey });
+  if (!shouldAttemptDailyXPost(existing)) {
     return { skipped: true, reason: 'already attempted' };
   }
 
   const attemptedAt = new Date().toISOString();
   await updateNotificationRecord({
-    slot: 'night',
+    slot: 'close',
     dateKey,
     updates: {
       xPostAttemptedAt: attemptedAt,
@@ -60,9 +60,9 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
   });
 
   try {
-    const text = await generateNightXPostText({ userId, dateKey, localTime, timeZone });
+    const text = await generateDailyXPostText({ userId, dateKey, localTime, timeZone });
     await updateNotificationRecord({
-      slot: 'night',
+      slot: 'close',
       dateKey,
       updates: {
         xPostCandidateText: String(text || '').slice(0, 500)
@@ -73,7 +73,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
     const tweetId = String(result?.data?.id || '').trim();
 
     await updateNotificationRecord({
-      slot: 'night',
+      slot: 'close',
       dateKey,
       updates: {
         xPostStatus: 'posted',
@@ -93,7 +93,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
   } catch (error) {
     const errorText = String(error?.message || error || 'unknown error');
     const errorDetail = serializeXErrorDetail(error);
-    console.error('[x-posting] night post failed', {
+    console.error('[x-posting] daily post failed', {
       dateKey,
       error: errorText,
       detail: errorDetail
@@ -106,7 +106,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
       const tweetId = String(failureNoticeResult?.data?.id || '').trim();
 
       await updateNotificationRecord({
-        slot: 'night',
+        slot: 'close',
         dateKey,
         updates: {
           xPostStatus: 'posted_failure_notice',
@@ -132,7 +132,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
       const failureNotice = buildNightXPostFailureNotice();
 
       await updateNotificationRecord({
-        slot: 'night',
+        slot: 'close',
         dateKey,
         updates: {
           xPostStatus: 'failed',

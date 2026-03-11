@@ -8,7 +8,7 @@ import {
 } from '../src/services/assistantEngine.js';
 import {
   buildNightXPostFailureNotice,
-  shouldAttemptNightXPost
+  shouldAttemptDailyXPost
 } from '../src/services/xPosting.js';
 
 test('normalizeXPostText removes wrappers and enforces 280 code points', () => {
@@ -34,13 +34,13 @@ test('appendXMention appends a configurable mention within 280 code points', () 
   assert.match(output, / @dancing_amigo$/);
 });
 
-test('shouldAttemptNightXPost returns false once a daily post was attempted', () => {
-  assert.equal(shouldAttemptNightXPost(null), true);
-  assert.equal(shouldAttemptNightXPost({}), true);
-  assert.equal(shouldAttemptNightXPost({ xPostAttemptedAt: '2026-03-10T22:00:00Z' }), false);
-  assert.equal(shouldAttemptNightXPost({ xPostStatus: 'failed' }), false);
-  assert.equal(shouldAttemptNightXPost({ xPostedAt: '2026-03-10T22:01:00Z' }), false);
-  assert.equal(shouldAttemptNightXPost({ xPostId: '1234567890' }), false);
+test('shouldAttemptDailyXPost returns false once a daily post was attempted', () => {
+  assert.equal(shouldAttemptDailyXPost(null), true);
+  assert.equal(shouldAttemptDailyXPost({}), true);
+  assert.equal(shouldAttemptDailyXPost({ xPostAttemptedAt: '2026-03-11T03:00:00Z' }), false);
+  assert.equal(shouldAttemptDailyXPost({ xPostStatus: 'failed' }), false);
+  assert.equal(shouldAttemptDailyXPost({ xPostedAt: '2026-03-11T03:01:00Z' }), false);
+  assert.equal(shouldAttemptDailyXPost({ xPostId: '1234567890' }), false);
 });
 
 test('buildNightXPostFailureNotice matches the expected failure post text', () => {

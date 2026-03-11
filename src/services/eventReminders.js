@@ -14,7 +14,6 @@ import { getCalendarRfc3339ForLocalDateTime, getGoogleCalendarEventById } from '
 import { pushMessage } from './lineClient.js';
 import { createTextOutput } from './openaiClient.js';
 
-const END_REMINDER_INTERVAL_MINUTES = 15;
 const END_REMINDER_CUTOFF_HOUR = 22;
 
 function extractDateKey(boundary) {
@@ -502,7 +501,10 @@ async function clearEndScheduleIfMatches(record, scheduledAt, { clearRepeat = fa
 }
 
 async function scheduleNextEndRepeat({ record, event, previousScheduledAt }) {
-  const nextScheduledAt = addMinutesToIso(previousScheduledAt, END_REMINDER_INTERVAL_MINUTES);
+  const nextScheduledAt = addMinutesToIso(
+    previousScheduledAt,
+    config.line.endReminderIntervalMinutes
+  );
   if (!nextScheduledAt || !isBeforeEndReminderCutoff(nextScheduledAt)) {
     await upsertEventScheduleRecord(record.eventId, {
       ...record,

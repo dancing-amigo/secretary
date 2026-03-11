@@ -4,7 +4,9 @@ import assert from 'node:assert/strict';
 import {
   ACTION_SCHEMA,
   AGENDA_REWRITE_SCHEMA,
+  buildActiveConversationWindow,
   buildActionPrompt,
+  buildClosedBusinessDayWindow,
   normalizeAgendaEventsFromModel
 } from '../src/services/assistantEngine.js';
 
@@ -106,4 +108,43 @@ test('normalizeAgendaEventsFromModel rejects missing existing ids', () => {
       endTime: ''
     }
   ], currentEventsById), /既存 event の id が現在の予定一覧に存在しません。/);
+});
+
+test('buildActiveConversationWindow uses 03:00 as the business day boundary', () => {
+  assert.deepEqual(
+    buildActiveConversationWindow({
+      dateKey: '2026-03-11',
+      localTime: '02:30:00',
+      timeZone: 'UTC'
+    }),
+    {
+      since: '2026-03-10T03:00:00.000Z',
+      until: '2026-03-11T02:30:00.000Z'
+    }
+  );
+
+  assert.deepEqual(
+    buildActiveConversationWindow({
+      dateKey: '2026-03-11',
+      localTime: '12:30:00',
+      timeZone: 'UTC'
+    }),
+    {
+      since: '2026-03-11T03:00:00.000Z',
+      until: '2026-03-11T12:30:00.000Z'
+    }
+  );
+});
+
+test('buildClosedBusinessDayWindow spans exactly one 03:00-based business day', () => {
+  assert.deepEqual(
+    buildClosedBusinessDayWindow({
+      dateKey: '2026-03-10',
+      timeZone: 'UTC'
+    }),
+    {
+      since: '2026-03-10T03:00:00.000Z',
+      until: '2026-03-11T03:00:00.000Z'
+    }
+  );
 });

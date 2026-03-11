@@ -1,18 +1,13 @@
 import { config } from '../config.js';
 import { pushMessage } from './lineClient.js';
-import { prepareNightReview, runMorningPlan } from './assistantEngine.js';
+import { prepareDailyClose, runMorningPlan, shiftDateKey } from './assistantEngine.js';
 import {
   appendConversationTurn,
   completeNotificationWindow,
   failNotificationWindow
 } from './googleDriveState.js';
 import { cloudTasksConfigError, ensureDailyJobTask } from './cloudTasks.js';
-import { maybePostNightSummaryToX } from './xPosting.js';
-
-const DAILY_JOB_TIMES = {
-  morning: '08:00:00',
-  night: '22:00:00'
-};
+import { maybePostDailySummaryToX } from './xPosting.js';
 
 function getLocalDateTimeParts(timeZone, date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -56,7 +51,7 @@ async function sendToDefaultUser(text) {
 async function scheduleNextDailyJob(jobName, now = new Date()) {
   const result = await ensureDailyJobTask({
     jobName,
-    localTime: DAILY_JOB_TIMES[jobName],
+    localTime: config.app.jobTimes[jobName],
     timeZone: config.tz,
     now
   });
@@ -127,20 +122,15 @@ export async function runNightJob() {
     const snapshot = getLocalScheduleContext(config.tz);
 
     try {
-      const review = await prepareNightReview({
-        userId: config.line.defaultUserId,
-        dateKey: snapshot.dateKey,
-        localTime: snapshot.localTime,
-        timeZone: config.tz
-      });
+      const text = '今日のまとめを送ってください。予定どおりに進まなかったことや、予定外で起きたことがあれば、それも一緒に書いてください。';
 
-      const out = await sendToDefaultUser(review.text);
+      const out = await sendToDefaultUser(text);
       const messageSentAt = new Date().toISOString();
       try {
         await appendConversationTurn({
           userId: config.line.defaultUserId,
           role: 'assistant',
-          text: review.text,
+          text,
           at: messageSentAt
         });
       } catch {}
@@ -154,17 +144,46 @@ export async function runNightJob() {
         });
       } catch {}
 
+      return { skipped: false, ...out, ...snapshot };
+    } catch (error) {
+      try {
+        await failNotificationWindow({
+          slot: 'night',
+          dateKey: snapshot.dateKey,
+          localTime: snapshot.localTime,
+          error
+        });
+      } catch {}
+
+      throw error;
+    }
+  });
+}
+
+export async function runCloseJob() {
+  return runScheduledJob('close', async () => {
+    const snapshot = getLocalScheduleContext(config.tz);
+    const summaryDateKey = shiftDateKey(snapshot.dateKey, -1);
+
+    try {
+      const review = await prepareDailyClose({
+        userId: config.line.defaultUserId,
+        dateKey: summaryDateKey,
+        localTime: snapshot.localTime,
+        timeZone: config.tz
+      });
+
       let xPost = { skipped: true, reason: 'not attempted' };
       try {
-        xPost = await maybePostNightSummaryToX({
+        xPost = await maybePostDailySummaryToX({
           userId: config.line.defaultUserId,
-          dateKey: snapshot.dateKey,
+          dateKey: summaryDateKey,
           localTime: snapshot.localTime,
           timeZone: config.tz
         });
       } catch (error) {
         console.error('[scheduler] x post attempt failed unexpectedly', {
-          dateKey: snapshot.dateKey,
+          dateKey: summaryDateKey,
           error: String(error?.message || error)
         });
         xPost = {
@@ -174,12 +193,26 @@ export async function runNightJob() {
         };
       }
 
-      return { skipped: false, ...out, ...snapshot, ...review, xPost };
+      try {
+        await completeNotificationWindow({
+          slot: 'close',
+          dateKey: summaryDateKey,
+          localTime: snapshot.localTime
+        });
+      } catch {}
+
+      return {
+        skipped: false,
+        ...snapshot,
+        summaryDateKey,
+        ...review,
+        xPost
+      };
     } catch (error) {
       try {
         await failNotificationWindow({
-          slot: 'night',
-          dateKey: snapshot.dateKey,
+          slot: 'close',
+          dateKey: summaryDateKey,
           localTime: snapshot.localTime,
           error
         });
@@ -199,6 +232,7 @@ export async function startSchedulers() {
 
   await Promise.all([
     scheduleNextDailyJob('morning'),
-    scheduleNextDailyJob('night')
+    scheduleNextDailyJob('night'),
+    scheduleNextDailyJob('close')
   ]);
 }

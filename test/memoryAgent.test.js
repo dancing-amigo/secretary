@@ -210,6 +210,58 @@ test('answerFromMemory limits primary and secondary nodes and reads secondary on
   assert.match(structuredCalls[1].userPrompt, /p1 body/);
 });
 
+test('answerFromMemory logs query and read files on success', async () => {
+  const registryEntries = [
+    { id: 'p1', name: 'P1', aliases: [], description: 'd1', type: 'profile', path: 'profiles/p1.md' },
+    { id: 's1', name: 'S1', aliases: [], description: 'sd1', type: 'detail', path: 'details/s1.md' }
+  ];
+  const registryById = new Map(registryEntries.map((entry) => [entry.id, entry]));
+  const registryByPath = new Map(registryEntries.map((entry) => [entry.path, entry]));
+  const logs = [];
+  const originalConsoleLog = console.log;
+
+  console.log = (...args) => {
+    logs.push(args);
+  };
+
+  try {
+    await answerFromMemory({
+      text: '大学時代の活動を教えて',
+      conversationContext: { text: '- 会話履歴なし' },
+      dateContext: { dateKey: '2026-03-10', localTime: '12:00:00', timeZone: 'America/Vancouver' }
+    }, {
+      loadMemoryStore: async () => ({
+        indexMarkdown: '# memory index',
+        registryEntries,
+        registryById,
+        registryByPath
+      }),
+      readMemoryNodeContent: async (entry) => ({
+        entry,
+        body: `${entry.id} body`,
+        frontmatter: {},
+        links: entry.id === 'p1' ? ['s1'] : []
+      }),
+      createStructuredOutput: async ({ schemaName }) => schemaName === 'memory_primary_selection'
+        ? { nodes: [{ nodeId: 'p1', reason: '1' }] }
+        : { nodes: [{ nodeId: 's1', reason: '2' }] },
+      createTextOutput: async () => '返答です。'
+    });
+  } finally {
+    console.log = originalConsoleLog;
+  }
+
+  assert.equal(logs.length, 1);
+  assert.equal(logs[0][0], '[memory-agent] completed');
+  assert.equal(logs[0][1].query, '大学時代の活動を教えて');
+  assert.deepEqual(logs[0][1].readFiles, [
+    'memory/index.md',
+    'memory/node-registry.yaml',
+    'memory/profiles/p1.md',
+    'memory/details/s1.md'
+  ]);
+});
+
 test('answerFromMemory falls back to generic error message on store failure', async () => {
   const reply = await answerFromMemory({
     text: '覚えてる？',

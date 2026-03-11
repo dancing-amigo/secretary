@@ -231,6 +231,12 @@ export function normalizeMemorySelectionIds(rawNodes, allowedIds, limit) {
   return normalized;
 }
 
+function toMemoryFilePath(relativePath) {
+  const normalizedFolder = String(config.googleDrive.memoryFolderName || 'memory').trim() || 'memory';
+  const normalizedPath = String(relativePath || '').trim().replace(/^\/+/, '');
+  return normalizedPath ? `${normalizedFolder}/${normalizedPath}` : normalizedFolder;
+}
+
 async function selectPrimaryNodes({
   text,
   dateContext,
@@ -332,6 +338,17 @@ export async function answerFromMemory(
   const readMemoryNodeContentFn = deps.readMemoryNodeContent || readMemoryNodeContent;
   const createStructuredOutputFn = deps.createStructuredOutput || createStructuredOutput;
   const createTextOutputFn = deps.createTextOutput || createTextOutput;
+  const readFiles = [
+    toMemoryFilePath('index.md'),
+    toMemoryFilePath('node-registry.yaml')
+  ];
+  const logContext = {
+    action: 'memory',
+    query: String(text || '').trim(),
+    dateKey: String(dateContext?.dateKey || '').trim(),
+    localTime: String(dateContext?.localTime || '').trim(),
+    timeZone: String(dateContext?.timeZone || '').trim()
+  };
 
   try {
     const memoryStore = await loadMemoryStoreFn();
@@ -345,7 +362,11 @@ export async function answerFromMemory(
     });
 
     const primaryNodes = await Promise.all(
-      primarySelections.map(async (selection) => readMemoryNodeContentFn(memoryStore.registryById.get(selection.nodeId)))
+      primarySelections.map(async (selection) => {
+        const entry = memoryStore.registryById.get(selection.nodeId);
+        readFiles.push(toMemoryFilePath(entry?.path));
+        return readMemoryNodeContentFn(entry);
+      })
     );
 
     const linkedEntriesByPrimaryId = new Map(
@@ -365,7 +386,11 @@ export async function answerFromMemory(
     });
 
     const secondaryNodes = await Promise.all(
-      secondarySelections.map(async (selection) => readMemoryNodeContentFn(memoryStore.registryById.get(selection.nodeId)))
+      secondarySelections.map(async (selection) => {
+        const entry = memoryStore.registryById.get(selection.nodeId);
+        readFiles.push(toMemoryFilePath(entry?.path));
+        return readMemoryNodeContentFn(entry);
+      })
     );
 
     const reply = await generateMemoryReply({
@@ -377,9 +402,18 @@ export async function answerFromMemory(
       createTextOutputFn
     });
 
-    return normalizeMemoryReply(reply);
+    const normalizedReply = normalizeMemoryReply(reply);
+    console.log('[memory-agent] completed', {
+      ...logContext,
+      primaryNodeIds: primaryNodes.map((node) => node.entry.id),
+      secondaryNodeIds: secondaryNodes.map((node) => node.entry.id),
+      readFiles: Array.from(new Set(readFiles))
+    });
+    return normalizedReply;
   } catch (error) {
     console.error('[memory-agent] failed', {
+      ...logContext,
+      readFiles: Array.from(new Set(readFiles)),
       error: String(error?.message || error)
     });
     return MEMORY_FAILURE_MESSAGE;

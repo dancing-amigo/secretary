@@ -13,6 +13,16 @@ export function buildNightXPostFailureNotice(username = config.x.mentionUsername
   );
 }
 
+function serializeXErrorDetail(error) {
+  if (error?.responseBody) {
+    try {
+      return JSON.stringify(error.responseBody).slice(0, 500);
+    } catch {}
+  }
+
+  return String(error?.message || error || 'unknown error').slice(0, 500);
+}
+
 export function shouldAttemptNightXPost(record) {
   if (!record || typeof record !== 'object') return true;
   return !(
@@ -51,6 +61,13 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
 
   try {
     const text = await generateNightXPostText({ userId, dateKey, localTime, timeZone });
+    await updateNotificationRecord({
+      slot: 'night',
+      dateKey,
+      updates: {
+        xPostCandidateText: String(text || '').slice(0, 500)
+      }
+    });
     const result = await postTweet(text);
     const postedAt = new Date().toISOString();
     const tweetId = String(result?.data?.id || '').trim();
@@ -75,9 +92,11 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
     };
   } catch (error) {
     const errorText = String(error?.message || error || 'unknown error');
+    const errorDetail = serializeXErrorDetail(error);
     console.error('[x-posting] night post failed', {
       dateKey,
-      error: errorText
+      error: errorText,
+      detail: errorDetail
     });
 
     try {
@@ -95,7 +114,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
           xPostId: tweetId,
           xPostText: failureNotice,
           xPostError: failureNotice.slice(0, 500),
-          xPostInternalError: errorText.slice(0, 500)
+          xPostInternalError: `${errorText} | ${errorDetail}`.slice(0, 500)
         }
       });
 
@@ -119,7 +138,7 @@ export async function maybePostNightSummaryToX({ userId, dateKey, localTime, tim
           xPostStatus: 'failed',
           xPostFailedAt: failedAt,
           xPostError: failureNotice.slice(0, 500),
-          xPostInternalError: `${errorText} | failure_notice: ${fallbackErrorText}`.slice(0, 500)
+          xPostInternalError: `${errorText} | ${errorDetail} | failure_notice: ${fallbackErrorText}`.slice(0, 500)
         }
       });
 

@@ -33,6 +33,26 @@ test('normalizeMemoryRegistryEntry keeps id/name/aliases/description/type/path',
   });
 });
 
+test('normalizeMemoryRegistryEntry accepts ./-prefixed relative paths', () => {
+  const entry = normalizeMemoryRegistryEntry({
+    id: 'kazuya-hashimoto',
+    name: 'Kazuya Hashimoto',
+    aliases: ['橋本和也', '兄'],
+    description: 'ユーザーの兄。',
+    type: 'person',
+    path: './people/kazuya-hashimoto.md'
+  });
+
+  assert.deepEqual(entry, {
+    id: 'kazuya-hashimoto',
+    name: 'Kazuya Hashimoto',
+    aliases: ['橋本和也', '兄'],
+    description: 'ユーザーの兄。',
+    type: 'person',
+    path: 'people/kazuya-hashimoto.md'
+  });
+});
+
 test('parseMemoryFrontmatter reads body and frontmatter links', () => {
   const parsed = parseMemoryFrontmatter([
     '---',

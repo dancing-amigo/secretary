@@ -12,7 +12,10 @@ function normalizeMemoryRelativePath(path) {
 
   const folderPrefix = `${String(config.googleDrive.memoryFolderName || 'memory').trim()}/`;
   const withoutPrefix = raw.startsWith(folderPrefix) ? raw.slice(folderPrefix.length) : raw;
-  const segments = withoutPrefix.split('/').map((segment) => segment.trim()).filter(Boolean);
+  const withoutDotPrefix = withoutPrefix.replace(/^(\.\/)+/, '');
+  if (!withoutDotPrefix) return '';
+
+  const segments = withoutDotPrefix.split('/').map((segment) => segment.trim()).filter(Boolean);
   if (segments.length === 0 || segments.some((segment) => segment === '.' || segment === '..')) {
     return '';
   }

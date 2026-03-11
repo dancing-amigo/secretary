@@ -50,7 +50,9 @@ function formatNodeForPrompt(node) {
     `type: ${node.entry.type}`,
     `description: ${node.entry.description}`,
     `path: ${node.entry.path}`,
-    `links: ${node.links.length > 0 ? node.links.join(', ') : '(none)'}`,
+    `links: ${node.links.length > 0
+      ? node.links.map((link) => link.label || link.id || link.path || '(unknown)').join(', ')
+      : '(none)'}`,
     '[body]',
     node.body || '(empty)'
   ];
@@ -73,9 +75,11 @@ function formatSecondaryCandidateSummary(primaryNodes, linkedEntriesByPrimaryId)
         '[linked registry candidates]',
         linkedEntries.length > 0
           ? linkedEntries
-            .map((entry) => {
+            .map(({ entry, link }) => {
               const aliases = entry.aliases.length > 0 ? ` / aliases: ${entry.aliases.join(', ')}` : '';
-              return `- id: ${entry.id} / name: ${entry.name} / type: ${entry.type} / description: ${entry.description}${aliases}`;
+              const linkLabel = link?.label ? ` / linkLabel: ${link.label}` : '';
+              const linkType = link?.type ? ` / linkType: ${link.type}` : '';
+              return `- id: ${entry.id} / name: ${entry.name} / type: ${entry.type} / description: ${entry.description}${aliases}${linkLabel}${linkType}`;
             })
             .join('\n')
           : '- 候補なし'
@@ -275,7 +279,7 @@ async function selectSecondaryNodes({
   createStructuredOutputFn
 }) {
   const allowedIds = Array.from(new Set(
-    primaryNodes.flatMap((node) => (linkedEntriesByPrimaryId.get(node.entry.id) || []).map((entry) => entry.id))
+    primaryNodes.flatMap((node) => (linkedEntriesByPrimaryId.get(node.entry.id) || []).map(({ entry }) => entry.id))
   ));
 
   if (allowedIds.length === 0) {

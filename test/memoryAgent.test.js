@@ -57,14 +57,20 @@ test('parseMemoryFrontmatter reads body and frontmatter links', () => {
   const parsed = parseMemoryFrontmatter([
     '---',
     'links:',
-    '  - related-node',
+    '  - id: related-node',
+    '    type: person',
+    '    label: Related Node',
     'summary: test',
     '---',
     '',
     '本文です。'
   ].join('\n'));
 
-  assert.deepEqual(parsed.frontmatter.links, ['related-node']);
+  assert.deepEqual(parsed.frontmatter.links, [{
+    id: 'related-node',
+    type: 'person',
+    label: 'Related Node'
+  }]);
   assert.equal(parsed.body, '本文です。');
 });
 
@@ -79,10 +85,11 @@ test('resolveLinkedRegistryEntries only returns linked registry nodes', () => {
   ]);
 
   const linked = resolveLinkedRegistryEntries({
-    links: ['related-node']
+    links: [{ id: 'related-node', path: '', label: '関連ノード', type: 'fact' }]
   }, registryById, registryByPath);
 
-  assert.deepEqual(linked.map((entry) => entry.id), ['related-node']);
+  assert.deepEqual(linked.map(({ entry }) => entry.id), ['related-node']);
+  assert.equal(linked[0].link.label, '関連ノード');
 });
 
 test('normalizeMemorySelectionIds enforces allowed ids and limit', () => {
@@ -107,15 +114,23 @@ test('buildSecondarySelectionPrompt includes primary body and link constraints',
       path: 'profiles/college.md'
     },
     body: '大学時代は演劇サークルに所属していた。',
-    links: ['club-node']
+    links: [{ id: 'club-node', path: '', label: '演劇サークル', type: 'group' }]
   }];
   const linkedEntriesByPrimaryId = new Map([
     ['primary-1', [{
-      id: 'club-node',
-      name: '演劇サークル',
-      type: 'group',
-      description: '演劇サークルの情報',
-      aliases: ['劇団']
+      entry: {
+        id: 'club-node',
+        name: '演劇サークル',
+        type: 'group',
+        description: '演劇サークルの情報',
+        aliases: ['劇団']
+      },
+      link: {
+        id: 'club-node',
+        path: '',
+        label: '演劇サークル',
+        type: 'group'
+      }
     }]]
   ]);
 
@@ -132,6 +147,7 @@ test('buildSecondarySelectionPrompt includes primary body and link constraints',
   assert.match(prompt, /大学時代は演劇サークルに所属していた。/);
   assert.match(prompt, /secondary 候補は primary ノード frontmatter の links に含まれる node だけに限定する/);
   assert.match(prompt, /id: club-node/);
+  assert.match(prompt, /linkLabel: 演劇サークル/);
 });
 
 test('buildMemoryReplyPrompt instructs model not to guess when no nodes were found', () => {
@@ -183,11 +199,11 @@ test('answerFromMemory limits primary and secondary nodes and reads secondary on
         body: `${entry.id} body`,
         frontmatter: {},
         links: entry.id === 'p1'
-          ? ['s1', 's2']
+          ? [{ id: 's1', path: '', label: 'S1', type: 'detail' }, { id: 's2', path: '', label: 'S2', type: 'detail' }]
           : entry.id === 'p2'
-            ? ['s3']
+            ? [{ id: 's3', path: '', label: 'S3', type: 'detail' }]
             : entry.id === 'p3'
-              ? ['s4']
+              ? [{ id: 's4', path: '', label: 'S4', type: 'detail' }]
               : []
       };
     },
@@ -260,7 +276,7 @@ test('answerFromMemory logs query and read files on success', async () => {
         entry,
         body: `${entry.id} body`,
         frontmatter: {},
-        links: entry.id === 'p1' ? ['s1'] : []
+        links: entry.id === 'p1' ? [{ id: 's1', path: '', label: 'S1', type: 'detail' }] : []
       }),
       createStructuredOutput: async ({ schemaName }) => schemaName === 'memory_primary_selection'
         ? { nodes: [{ nodeId: 'p1', reason: '1' }] }

@@ -100,34 +100,62 @@ function normalizeLinkToken(value) {
   return normalized || '';
 }
 
+function normalizeMemoryLink(rawLink) {
+  if (typeof rawLink === 'string') {
+    const normalized = normalizeLinkToken(rawLink);
+    if (!normalized) return null;
+
+    const normalizedPath = normalizeMemoryRelativePath(normalized);
+    return {
+      id: normalizedPath ? '' : normalized,
+      path: normalizedPath,
+      label: '',
+      type: ''
+    };
+  }
+
+  if (!rawLink || typeof rawLink !== 'object' || Array.isArray(rawLink)) {
+    return null;
+  }
+
+  const id = normalizeLinkToken(rawLink.id || rawLink.nodeId || rawLink.target);
+  const path = normalizeMemoryRelativePath(rawLink.path);
+  const label = normalizeString(rawLink.label, 200);
+  const type = normalizeString(rawLink.type, 80);
+
+  if (!id && !path) {
+    return null;
+  }
+
+  return {
+    id,
+    path,
+    label,
+    type
+  };
+}
+
 export function normalizeMemoryLinks(rawLinks) {
   const links = Array.isArray(rawLinks) ? rawLinks : [];
   const collected = [];
+  const seenKeys = new Set();
 
   for (const link of links) {
-    if (typeof link === 'string') {
-      const normalized = normalizeLinkToken(link);
-      if (normalized) collected.push(normalized);
+    const normalized = normalizeMemoryLink(link);
+    if (!normalized) {
       continue;
     }
 
-    if (!link || typeof link !== 'object' || Array.isArray(link)) {
+    const dedupeKey = normalized.id || normalized.path;
+    if (!dedupeKey || seenKeys.has(dedupeKey)) {
       continue;
     }
 
-    const normalized = [
-      normalizeLinkToken(link.id),
-      normalizeLinkToken(link.nodeId),
-      normalizeLinkToken(link.target),
-      normalizeMemoryRelativePath(link.path)
-    ].find(Boolean);
-
-    if (normalized) {
-      collected.push(normalized);
-    }
+    seenKeys.add(dedupeKey);
+    collected.push(normalized);
   }
 
-  return Array.from(new Set(collected)).slice(0, 50);
+  return collected.slice(0, 50);
 }
 
 export async function readMemoryIndexMarkdown() {
@@ -194,13 +222,21 @@ export function resolveLinkedRegistryEntries(node, registryById, registryByPath)
   const seenIds = new Set();
 
   for (const link of Array.isArray(node?.links) ? node.links : []) {
-    const entry = registryById.get(link) || registryByPath.get(normalizeMemoryRelativePath(link));
+    const entry = registryById.get(link.id) || registryByPath.get(link.path);
     if (!entry || seenIds.has(entry.id)) {
       continue;
     }
 
     seenIds.add(entry.id);
-    resolved.push(entry);
+    resolved.push({
+      entry,
+      link: {
+        id: link.id,
+        path: link.path,
+        label: link.label,
+        type: link.type
+      }
+    });
   }
 
   return resolved;

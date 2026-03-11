@@ -16,7 +16,10 @@
 
 ## 進行中プラン一覧
 
-- なし
+### `STEP24.md`
+- `03:00` close ジョブの `summaryContextText` を廃止し、日次ログ Markdown を唯一の close 成果物に寄せる
+- 朝メッセージと X 投稿は notification state の内部サマリーではなく `record/timeline/days/YYYY-MM-DD.md` を直接読む構成へ切り替える
+- close record には重複防止と実行状態に必要な最小情報だけを残し、二重管理を解消する
 
 ## 完了済みプラン一覧
 

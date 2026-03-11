@@ -6,7 +6,7 @@ import {
   readSoulMarkdown,
   readUserMarkdown,
   updateNotificationRecord,
-  upsertDailyLog,
+  writeDailyTimelineRecord,
   writeSoulMarkdown,
   writeUserMarkdown
 } from './googleDriveState.js';
@@ -42,14 +42,29 @@ const PROFILE_EDIT_SCHEMA = {
   }
 };
 
-const NIGHT_SUMMARY_SCHEMA = {
+export const CLOSE_SUMMARY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['extraNotes'],
+  required: ['notes', 'eventNotes'],
   properties: {
-    extraNotes: {
+    notes: {
       type: 'array',
       items: { type: 'string' }
+    },
+    eventNotes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['eventId', 'notes'],
+        properties: {
+          eventId: { type: 'string' },
+          notes: {
+            type: 'array',
+            items: { type: 'string' }
+          }
+        }
+      }
     }
   }
 };
@@ -349,9 +364,9 @@ function formatAgendaContext(calendarSnapshot) {
   return [...header, formatCalendarEvents(calendarSnapshot.events)].join('\n');
 }
 
-function normalizeSummaryList(items) {
+function normalizeLogNoteList(items, limit = 20) {
   return Array.isArray(items)
-    ? items.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 6)
+    ? items.map((item) => String(item || '').trim().slice(0, 500)).filter(Boolean).slice(0, limit)
     : [];
 }
 
@@ -360,25 +375,87 @@ function formatEventLine(event) {
     ? 'All day'
     : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
   const notifyText = event.notifyOnEnd ? ' | notifyOnEnd:on' : '';
-  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}${notifyText}`;
+  const detailText = event.detail ? ` | detail: ${event.detail}` : '';
+  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}${detailText}${notifyText}`;
 }
 
-function formatCloseSummaryLog({ events, extraNotes, calendarSyncError }) {
+function normalizeEventNotes(entries) {
+  const noteMap = new Map();
+
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const eventId = String(entry?.eventId || '').trim();
+    if (!eventId) continue;
+    const notes = normalizeLogNoteList(entry?.notes, 12);
+    if (notes.length === 0) continue;
+    noteMap.set(eventId, notes);
+  }
+
+  return noteMap;
+}
+
+function formatTimelineEventHeader(event) {
+  const timeText = event.allDay
+    ? '終日'
+    : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
+  return `- [${event.status || 'todo'}] ${timeText} ${event.title || '(no title)'}`;
+}
+
+function formatTimelineEventBlock(event, eventNotes = []) {
+  const lines = [formatTimelineEventHeader(event)];
+
+  if (event.detail) {
+    lines.push(`  - 詳細: ${event.detail}`);
+  }
+
+  if (event.notifyOnEnd) {
+    lines.push('  - 通知: 終了時通知あり');
+  }
+
+  for (const note of eventNotes) {
+    lines.push(`  - 補足: ${note}`);
+  }
+
+  return lines.join('\n');
+}
+
+export function formatDailyTimelineMarkdown({ dateKey, events, notes, eventNotesById }) {
+  const normalizedEventNotes = eventNotesById instanceof Map ? eventNotesById : new Map();
+  const plannedLines = events.length > 0
+    ? events.map((event) => formatTimelineEventBlock(event, normalizedEventNotes.get(event.eventId) || []))
+    : ['- 予定なし'];
+  const noteLines = notes.length > 0 ? notes.map((note) => `- ${note}`) : ['- なし'];
+
   return [
-    '### Events',
-    ...(events.length > 0 ? events.map((event) => formatEventLine(event)) : ['- 予定なし']),
+    `# ${dateKey}`,
     '',
-    '### 補足メモ',
-    ...(calendarSyncError ? [`- カレンダー同期失敗: ${calendarSyncError}`] : []),
-    ...(extraNotes.length > 0 ? extraNotes.map((item) => `- ${item}`) : calendarSyncError ? [] : ['- 特記事項なし'])
+    '## 今日の予定',
+    ...plannedLines,
+    '',
+    '## ノート',
+    ...noteLines,
+    ''
   ].join('\n');
 }
 
-function formatCloseSummaryContext({ dateKey, events, extraNotes, calendarSyncError }) {
+function formatCloseSummaryContext({ dateKey, events, notes, eventNotesById }) {
   return [
     `対象日付: ${dateKey}`,
-    formatCloseSummaryLog({ events, extraNotes, calendarSyncError })
-  ].join('\n\n');
+    '',
+    '### 今日の予定',
+    ...(events.length > 0
+      ? events.flatMap((event) => {
+          const lines = [formatEventLine(event)];
+          const supplements = eventNotesById.get(event.eventId) || [];
+          for (const supplement of supplements) {
+            lines.push(`  - 補足: ${supplement}`);
+          }
+          return lines;
+        })
+      : ['- 予定なし']),
+    '',
+    '### ノート',
+    ...(notes.length > 0 ? notes.map((item) => `- ${item}`) : ['- なし'])
+  ].join('\n');
 }
 
 function buildDailyXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText, summaryText }) {
@@ -419,15 +496,19 @@ function buildCloseSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
     `タイムゾーン: ${timeZone}`,
     '',
     '目的:',
-    '- event 一覧そのものは別途固定フォーマットで保存するので、ここでは会話履歴からしか取れない補足情報だけを抽出する',
-    '- 予定の追加、削除、変更、完了が event 一覧を見れば分かる場合は繰り返さない',
+    '- 日次記録を、後から事実を追える詳細ログとして残す',
+    '- event 一覧はアプリ側で固定フォーマットに整形するので、ここでは会話由来の具体的な補足、経緯、背景、記憶候補をできるだけ落とさず抽出する',
+    '- 要約しすぎず、将来 memory 更新に使える具体性を優先する',
     '',
     '出力ルール:',
-    '- extraNotes だけを返す',
-    '- extraNotes には、会話から読み取れる重要な制約、背景、注意事項、翌日以降にも効くメモだけを書く',
-    '- event の title, time, status を書き直さない',
-    '- 該当がなければ空配列にする',
-    '- 各配列要素は短い日本語の 1 文で書く',
+    '- notes と eventNotes を持つ JSON オブジェクトだけを返す',
+    '- notes には、予定外にやったこと、その日の判断背景、制約、気づき、今後の memory 更新に役立つ具体的事実を書く',
+    '- eventNotes には、特定 event に紐づく補足事情、変更経緯、完了状況、遅延、関連人物、注意点を書く',
+    '- eventNotes の eventId は、与えられた予定一覧に出てくる id だけを使う',
+    '- event の title, time, status をそのまま言い換えるだけの文は避ける',
+    '- 情報量は落とさず、短すぎる要約にしない',
+    '- 該当がなければ notes は空配列、eventNotes も空配列にする',
+    '- 各配列要素は日本語の具体的な文または短い文のまとまりにする',
     '- 根拠のない推測は避ける',
     '',
     '会話履歴:',
@@ -656,11 +737,11 @@ function normalizeProfileEditContent(content) {
     .concat('\n');
 }
 
-async function generateCloseSummary({ dateKey, localTime, timeZone, conversationContext, events, calendarSyncError = '' }) {
+async function generateCloseSummary({ dateKey, localTime, timeZone, conversationContext, events }) {
   const raw = await createStructuredOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     schemaName: 'night_summary',
-    schema: NIGHT_SUMMARY_SCHEMA,
+    schema: CLOSE_SUMMARY_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
     userPrompt: buildCloseSummaryPrompt({
       dateKey,
@@ -671,20 +752,23 @@ async function generateCloseSummary({ dateKey, localTime, timeZone, conversation
     })
   });
 
-  const extraNotes = normalizeSummaryList(raw.extraNotes);
+  const notes = normalizeLogNoteList(raw.notes);
+  const eventNotesById = normalizeEventNotes(raw.eventNotes);
 
   return {
-    extraNotes,
+    notes,
+    eventNotesById,
     summaryContextText: formatCloseSummaryContext({
       dateKey,
       events,
-      extraNotes,
-      calendarSyncError
+      notes,
+      eventNotesById
     }),
-    logEntryMarkdown: formatCloseSummaryLog({
+    recordMarkdown: formatDailyTimelineMarkdown({
+      dateKey,
       events,
-      extraNotes,
-      calendarSyncError
+      notes,
+      eventNotesById
     })
   };
 }
@@ -1042,14 +1126,12 @@ export async function prepareDailyClose({ userId, dateKey, localTime, timeZone =
   const calendarSnapshot = await executionContext.getCalendarSnapshot('daily_close');
   const existing = await getNotificationRecord({ slot: 'close', dateKey });
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
-  const calendarSyncError = calendarSnapshot.failed ? String(calendarSnapshot.error || 'unknown error') : '';
   const summary = await generateCloseSummary({
     dateKey,
     localTime,
     timeZone,
     conversationContext,
-    events,
-    calendarSyncError
+    events
   });
 
   await updateNotificationRecord({
@@ -1067,25 +1149,25 @@ export async function prepareDailyClose({ userId, dateKey, localTime, timeZone =
     }
   });
 
-  let logUpdated = false;
-  if (!existing?.logUpdatedAt) {
-    await upsertDailyLog({
+  let recordUpdated = false;
+  if (!existing?.recordUpdatedAt && !existing?.logUpdatedAt) {
+    await writeDailyTimelineRecord({
       dateKey,
-      entryMarkdown: summary.logEntryMarkdown
+      entryMarkdown: summary.recordMarkdown
     });
     await updateNotificationRecord({
       slot: 'close',
       dateKey,
       updates: {
-        logUpdatedAt: new Date().toISOString()
+        recordUpdatedAt: new Date().toISOString()
       }
     });
-    logUpdated = true;
+    recordUpdated = true;
   }
 
   return {
     reusedSummary: false,
-    logUpdated,
+    recordUpdated,
     summaryContextText: summary.summaryContextText
   };
 }

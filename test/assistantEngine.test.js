@@ -4,9 +4,11 @@ import assert from 'node:assert/strict';
 import {
   ACTION_SCHEMA,
   AGENDA_REWRITE_SCHEMA,
+  CLOSE_SUMMARY_SCHEMA,
   buildActiveConversationWindow,
   buildActionPrompt,
   buildClosedBusinessDayWindow,
+  formatDailyTimelineMarkdown,
   normalizeAgendaEventsFromModel
 } from '../src/services/assistantEngine.js';
 
@@ -147,4 +149,57 @@ test('buildClosedBusinessDayWindow spans exactly one 03:00-based business day', 
       until: '2026-03-11T03:00:00.000Z'
     }
   );
+});
+
+test('CLOSE_SUMMARY_SCHEMA requires notes and eventNotes', () => {
+  const propertyKeys = Object.keys(CLOSE_SUMMARY_SCHEMA.properties).sort();
+  const requiredKeys = [...CLOSE_SUMMARY_SCHEMA.required].sort();
+
+  assert.deepEqual(requiredKeys, propertyKeys);
+  assert.deepEqual(requiredKeys, ['eventNotes', 'notes']);
+});
+
+test('formatDailyTimelineMarkdown renders detailed event and note sections', () => {
+  const markdown = formatDailyTimelineMarkdown({
+    dateKey: '2026-03-11',
+    events: [
+      {
+        eventId: 'evt-1',
+        allDay: false,
+        startTime: '09:00:00',
+        endTime: '10:30:00',
+        title: '定例MTG',
+        status: 'done',
+        detail: '採用進捗のレビュー',
+        notifyOnEnd: true
+      }
+    ],
+    notes: [
+      '田中さんが来週から採用窓口に加わることを共有した。'
+    ],
+    eventNotesById: new Map([
+      ['evt-1', ['開始時刻を30分後ろ倒しした。', '議事録は採用フォルダに残した。']]
+    ])
+  });
+
+  assert.match(markdown, /^# 2026-03-11/m);
+  assert.match(markdown, /^## 今日の予定/m);
+  assert.match(markdown, /- \[done\] 09:00-10:30 定例MTG/);
+  assert.match(markdown, /  - 詳細: 採用進捗のレビュー/);
+  assert.match(markdown, /  - 通知: 終了時通知あり/);
+  assert.match(markdown, /  - 補足: 開始時刻を30分後ろ倒しした。/);
+  assert.match(markdown, /^## ノート/m);
+  assert.match(markdown, /- 田中さんが来週から採用窓口に加わることを共有した。/);
+});
+
+test('formatDailyTimelineMarkdown renders empty sections consistently', () => {
+  const markdown = formatDailyTimelineMarkdown({
+    dateKey: '2026-03-12',
+    events: [],
+    notes: [],
+    eventNotesById: new Map()
+  });
+
+  assert.match(markdown, /## 今日の予定\n- 予定なし/);
+  assert.match(markdown, /## ノート\n- なし/);
 });

@@ -6,9 +6,9 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const GOOGLE_DRIVE_API_URL = 'https://www.googleapis.com/drive/v3/files';
 const GOOGLE_DRIVE_UPLOAD_URL = 'https://www.googleapis.com/upload/drive/v3/files';
 const CONVERSATIONS_FOLDER_NAME = 'conversations';
-const LOG_FILE_NAME = 'log.md';
 const SOUL_FILE_NAME = 'SOUL.md';
 const USER_FILE_NAME = 'USER.md';
+const DAILY_TIMELINE_FOLDER_PATH = ['record', 'timeline', 'days'];
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
@@ -16,9 +16,9 @@ let cachedNotificationStateFileId = null;
 let cachedGoogleCalendarSyncStateFileId = null;
 let cachedStatesFolderId = null;
 let cachedConversationsFolderId = null;
-let cachedLogFileId = null;
 const cachedConversationFileIds = new Map();
 const cachedFolderChildIds = new Map();
+const cachedDriveFilePathIds = new Map();
 
 function driveStateConfigError() {
   if (!config.googleDrive.enabled) return 'GOOGLE_DRIVE_ENABLED must be true';
@@ -386,28 +386,72 @@ async function ensureStatesFolderId() {
   return createdId;
 }
 
-async function ensureLogFileId() {
-  if (cachedLogFileId) return cachedLogFileId;
-
-  const existingId = await findDriveChildId({
-    parentId: config.googleDrive.folderId,
-    name: LOG_FILE_NAME
-  });
-
-  if (existingId) {
-    cachedLogFileId = existingId;
-    return existingId;
+function normalizeDrivePathSegments(path) {
+  if (Array.isArray(path)) {
+    return normalizeDriveRelativePath(path.join('/'));
   }
 
-  const createdId = await createDriveFile({
-    parentId: config.googleDrive.folderId,
-    name: LOG_FILE_NAME,
-    mimeType: 'text/markdown',
-    content: '# Daily Log\n'
+  return normalizeDriveRelativePath(path);
+}
+
+async function ensureDriveFolderPath({ parentId, pathSegments }) {
+  let currentParentId = parentId;
+
+  for (const segment of normalizeDrivePathSegments(pathSegments)) {
+    let folderId = await findDriveChildId({
+      parentId: currentParentId,
+      name: segment,
+      mimeType: 'application/vnd.google-apps.folder'
+    });
+
+    if (!folderId) {
+      folderId = await createDriveFile({
+        parentId: currentParentId,
+        name: segment,
+        mimeType: 'application/vnd.google-apps.folder',
+        content: ''
+      });
+    }
+
+    currentParentId = folderId;
+  }
+
+  return currentParentId;
+}
+
+async function ensureDriveFileIdByPath({ parentId, pathSegments, mimeType, initialContent }) {
+  const normalizedSegments = normalizeDrivePathSegments(pathSegments);
+  if (normalizedSegments.length === 0) {
+    throw new Error('Google Drive file path is required');
+  }
+
+  const cacheKey = `${parentId}::${normalizedSegments.join('/')}`;
+  if (cachedDriveFilePathIds.has(cacheKey)) {
+    return cachedDriveFilePathIds.get(cacheKey);
+  }
+
+  const folderSegments = normalizedSegments.slice(0, -1);
+  const fileName = normalizedSegments[normalizedSegments.length - 1];
+  const resolvedParentId = folderSegments.length > 0
+    ? await ensureDriveFolderPath({ parentId, pathSegments: folderSegments })
+    : parentId;
+
+  let fileId = await findDriveChildId({
+    parentId: resolvedParentId,
+    name: fileName
   });
 
-  cachedLogFileId = createdId;
-  return createdId;
+  if (!fileId) {
+    fileId = await createDriveFile({
+      parentId: resolvedParentId,
+      name: fileName,
+      mimeType,
+      content: initialContent
+    });
+  }
+
+  cachedDriveFilePathIds.set(cacheKey, fileId);
+  return fileId;
 }
 
 async function readDriveTextFile(fileId) {
@@ -1042,37 +1086,27 @@ export async function readConversationTurns({ userId, since, until }) {
     });
 }
 
-function upsertDailyLogSection(currentContent, dateKey, entryMarkdown) {
-  const current = String(currentContent || '').replace(/\r\n/g, '\n').trimEnd();
-  const section = `## ${dateKey}\n\n${String(entryMarkdown || '').trim()}\n`;
-
-  if (!current) {
-    return `# Daily Log\n\n${section}`;
-  }
-
-  const pattern = new RegExp(`(^## ${dateKey}\\n[\\s\\S]*?)(?=\\n## \\d{4}-\\d{2}-\\d{2}\\n|$)`, 'm');
-  if (pattern.test(current)) {
-    return `${current.replace(pattern, section.trimEnd())}\n`;
-  }
-
-  const normalized = current.startsWith('# Daily Log')
-    ? current.replace(/^# Daily Log\s*/, '# Daily Log\n\n')
-    : `# Daily Log\n\n${current}\n\n`;
-
-  return `${normalized}${section}`;
-}
-
-export async function upsertDailyLog({ dateKey, entryMarkdown }) {
+export async function writeDailyTimelineRecord({ dateKey, entryMarkdown }) {
   const configError = driveStateConfigError();
   if (configError) {
     throw new Error(configError);
   }
 
-  const fileId = await ensureLogFileId();
-  const currentContent = await readDriveTextFile(fileId);
-  const nextContent = upsertDailyLogSection(currentContent, dateKey, entryMarkdown);
-  await writeDriveTextFile(fileId, nextContent);
-  return nextContent;
+  const normalizedDateKey = String(dateKey || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDateKey)) {
+    throw new Error(`Invalid dateKey: ${dateKey}`);
+  }
+
+  const fileId = await ensureDriveFileIdByPath({
+    parentId: config.googleDrive.folderId,
+    pathSegments: [...DAILY_TIMELINE_FOLDER_PATH, `${normalizedDateKey}.md`],
+    mimeType: 'text/markdown',
+    initialContent: ''
+  });
+
+  const normalizedContent = String(entryMarkdown || '').replace(/\r\n/g, '\n').trimEnd().concat('\n');
+  await writeDriveTextFile(fileId, normalizedContent);
+  return normalizedContent;
 }
 
 export async function getNotificationRecord({ slot, dateKey }) {

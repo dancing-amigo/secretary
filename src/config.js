@@ -83,6 +83,8 @@ export const config = {
       String(process.env.GOOGLE_DRIVE_ENABLED || "false").toLowerCase() ===
       "true",
     folderId: process.env.GOOGLE_DRIVE_FOLDER_ID || "",
+    memoryFolderName:
+      process.env.GOOGLE_DRIVE_MEMORY_FOLDER_NAME || "memory",
     statesFolderName:
       process.env.GOOGLE_DRIVE_STATES_FOLDER_NAME || "states",
     notificationStateFileName:

@@ -2,9 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  ACTION_SCHEMA,
   AGENDA_REWRITE_SCHEMA,
+  buildActionPrompt,
   normalizeAgendaEventsFromModel
 } from '../src/services/assistantEngine.js';
+
+test('ACTION_SCHEMA includes memory action', () => {
+  assert.ok(ACTION_SCHEMA.properties.action.enum.includes('memory'));
+});
+
+test('buildActionPrompt explains when memory should be selected', () => {
+  const prompt = buildActionPrompt({
+    text: '大学時代のこと覚えてる？',
+    dateKey: '2026-03-10',
+    localTime: '12:00:00',
+    timeZone: 'America/Vancouver',
+    conversationText: '- 会話履歴なし',
+    agendaContext: '- 予定なし'
+  });
+
+  assert.match(prompt, /次の6つから必ず1つだけ選んでください。/);
+  assert.match(prompt, /- memory: /);
+  assert.match(prompt, /長期に保持された人物、所属、過去イベント、継続プロジェクト、背景事情などの記憶参照が主目的なら memory を選ぶ。/);
+});
 
 test('AGENDA_REWRITE_SCHEMA requires every event item property for strict mode', () => {
   const itemSchema = AGENDA_REWRITE_SCHEMA.properties.events.items;

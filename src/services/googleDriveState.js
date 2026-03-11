@@ -18,6 +18,7 @@ let cachedStatesFolderId = null;
 let cachedConversationsFolderId = null;
 let cachedLogFileId = null;
 const cachedConversationFileIds = new Map();
+const cachedFolderChildIds = new Map();
 
 function driveStateConfigError() {
   if (!config.googleDrive.enabled) return 'GOOGLE_DRIVE_ENABLED must be true';
@@ -263,6 +264,11 @@ async function findStateFileId({ name, initialContent, cacheKey }) {
 }
 
 async function findDriveChildId({ parentId, name, mimeType }) {
+  const cacheKey = `${parentId}::${mimeType || '*'}::${name}`;
+  if (cachedFolderChildIds.has(cacheKey)) {
+    return cachedFolderChildIds.get(cacheKey);
+  }
+
   const qParts = [
     'trashed = false',
     `name = '${escapeDriveQueryValue(name)}'`,
@@ -283,7 +289,9 @@ async function findDriveChildId({ parentId, name, mimeType }) {
     }
   });
 
-  return response.data?.files?.[0]?.id || null;
+  const fileId = response.data?.files?.[0]?.id || null;
+  cachedFolderChildIds.set(cacheKey, fileId);
+  return fileId;
 }
 
 async function createDriveFile({ parentId, name, mimeType, content }) {
@@ -425,6 +433,77 @@ async function readRootTextFile(name) {
   });
   if (!fileId) {
     throw new Error(`Google Drive root file not found: ${name}`);
+  }
+
+  return readDriveTextFile(fileId);
+}
+
+function normalizeDriveRelativePath(relativePath) {
+  const normalized = String(relativePath || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (normalized.length === 0) {
+    throw new Error('Google Drive relative path is required');
+  }
+
+  for (const segment of normalized) {
+    if (segment === '.' || segment === '..') {
+      throw new Error(`Invalid Google Drive relative path: ${relativePath}`);
+    }
+  }
+
+  return normalized;
+}
+
+async function findDriveFileIdByPath({ parentId, pathSegments }) {
+  let currentParentId = parentId;
+
+  for (let index = 0; index < pathSegments.length; index += 1) {
+    const segment = pathSegments[index];
+    const isLast = index === pathSegments.length - 1;
+    const childId = await findDriveChildId({
+      parentId: currentParentId,
+      name: segment,
+      mimeType: isLast ? undefined : 'application/vnd.google-apps.folder'
+    });
+
+    if (!childId) {
+      return null;
+    }
+
+    currentParentId = childId;
+  }
+
+  return currentParentId;
+}
+
+export async function readTextFileInDriveSubfolder({ folderName, relativePath }) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedFolderName = String(folderName || '').trim();
+  if (!normalizedFolderName) {
+    throw new Error('Google Drive folderName is required');
+  }
+
+  const folderId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: normalizedFolderName,
+    mimeType: 'application/vnd.google-apps.folder'
+  });
+  if (!folderId) {
+    throw new Error(`Google Drive folder not found: ${normalizedFolderName}`);
+  }
+
+  const pathSegments = normalizeDriveRelativePath(relativePath);
+  const fileId = await findDriveFileIdByPath({ parentId: folderId, pathSegments });
+  if (!fileId) {
+    throw new Error(`Google Drive file not found: ${normalizedFolderName}/${pathSegments.join('/')}`);
   }
 
   return readDriveTextFile(fileId);

@@ -12,16 +12,17 @@ import {
 } from './googleDriveState.js';
 import { pullGoogleCalendarEventsForDate, reconcileAgendaEventsForDate } from './googleCalendarSync.js';
 import { reconcileReminderSchedulesForDate } from './eventReminders.js';
+import { answerFromMemory } from './memoryAgent.js';
 import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 
-const ACTION_SCHEMA = {
+export const ACTION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['action', 'reason'],
   properties: {
     action: {
       type: 'string',
-      enum: ['modify_events', 'list_events', 'edit_soul', 'edit_user', 'others']
+      enum: ['modify_events', 'list_events', 'edit_soul', 'edit_user', 'others', 'memory']
     },
     reason: { type: 'string' }
   }
@@ -113,18 +114,19 @@ function getLocalDateContext(date = new Date()) {
   };
 }
 
-function buildActionPrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext }) {
+export function buildActionPrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext }) {
   return [
     'あなたは個人向けLINE秘書のアクション分類器です。',
     `現在のローカル日付: ${dateKey}`,
     `現在のローカル時刻: ${localTime}`,
     `タイムゾーン: ${timeZone}`,
     '',
-    '次の5つから必ず1つだけ選んでください。',
+    '次の6つから必ず1つだけ選んでください。',
     '- modify_events: ユーザーが今日の予定を追加・編集・削除・完了報告・補足更新したい意図の発話。',
     '- list_events: ユーザーが今日の予定一覧、やること一覧、行動一覧を知りたい意図の発話。',
     '- edit_soul: AIの人格・口調・振る舞い・判断方針・記憶運用として SOUL.md に反映すべき内容。明示的な編集依頼だけでなく、AIへのダメ出し、口調修正、振る舞い修正、今後の対応方針の指摘も含む。',
     '- edit_user: ユーザー属性・嗜好・前提情報・覚えておくべき事実として USER.md に反映すべき内容。明示的な編集依頼だけでなく、新しく判明した個人情報、好み、苦手、思考傾向、継続して覚えると役立つ事情も含む。',
+    '- memory: 予定操作や SOUL/USER 編集が主目的ではなく、Google Drive 上の長期記憶を参照して答えるのが主目的の質問や確認。',
     '- others: それ以外。雑談、あいさつ、曖昧な発話、副作用を起こすべきでない発話を含む。',
     '',
     '優先順位:',
@@ -136,6 +138,8 @@ function buildActionPrompt({ text, dateKey, localTime, timeZone, conversationTex
     '- edit_user に寄せる情報の例: ユーザーの新しいプロフィール、趣味、苦手、生活リズム、価値観、考え方、継続案件、覚えておくと今後の支援精度が上がる事実。',
     '- edit_soul に寄せる情報の例: 「もっと簡潔に」「その言い方は嫌」「勝手に決めず確認して」「今後は先に結論を言って」「そういうノリはやめて」など、AIの恒常的な振る舞い改善につながる指摘。',
     '- SOUL.md 対象なら edit_soul、USER.md 対象なら edit_user。両方に見える場合は、主に変えるべきものを選ぶ。どうしても主対象を決められない場合だけ others にする。',
+    '- 長期に保持された人物、所属、過去イベント、継続プロジェクト、背景事情などの記憶参照が主目的なら memory を選ぶ。',
+    '- ただし記憶参照を伴っていても、実際に予定を更新する依頼なら modify_events、SOUL/USER へ残すべき新規情報や修正が主目的なら edit_* を優先する。',
     '',
     '自然な日本語として広く解釈してください。',
     '可能なら、今日の予定状況を踏まえて解釈してください。',
@@ -956,6 +960,14 @@ export async function processUserMessage({ userId, text }) {
 
   if (actionPlan.action === 'list_events') {
     return formatAgendaList(Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []);
+  }
+
+  if (actionPlan.action === 'memory') {
+    return answerFromMemory({
+      text: rawText,
+      dateContext,
+      conversationContext
+    });
   }
 
   if (actionPlan.action === 'edit_soul' || actionPlan.action === 'edit_user') {

@@ -16,6 +16,11 @@
 
 ## 進行中プラン一覧
 
+### `STEP27.md`
+- LINE送信者を owner と visitor に分離し、非オーナー向けの read-only 応答ルートを追加する
+- visitor はオーナーの今日の予定、`memory` 参照、一般質問応答まで許可し、Calendar や `SOUL.md` / `USER.md` などの mutation は拒否する
+- 次の権限設定 Step に備え、送信者の会話履歴とオーナー情報参照の境界を分けた routing / 実行構造を先に整える
+
 ### `STEP26.md`
 - 朝ジョブの入力を前日 summary 依存から、前日分と直近3日分の `record/timeline/days/YYYY-MM-DD.md` 参照へ寄せる
 - 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する

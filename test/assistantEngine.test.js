@@ -8,8 +8,12 @@ import {
   buildActiveConversationWindow,
   buildActionPrompt,
   buildClosedBusinessDayWindow,
+  buildDailyXPostPrompt,
+  buildMorningGreetingPrompt,
   formatDailyTimelineMarkdown,
-  normalizeAgendaEventsFromModel
+  normalizeAgendaEventsFromModel,
+  prepareDailyClose,
+  runMorningPlan
 } from '../src/services/assistantEngine.js';
 
 test('ACTION_SCHEMA includes memory action', () => {
@@ -202,4 +206,107 @@ test('formatDailyTimelineMarkdown renders empty sections consistently', () => {
 
   assert.match(markdown, /## 今日の予定\n- 予定なし/);
   assert.match(markdown, /## ノート\n- なし/);
+});
+
+test('buildMorningGreetingPrompt reads from previous daily log instead of close summary', () => {
+  const prompt = buildMorningGreetingPrompt({
+    dateKey: '2026-03-12',
+    localTime: '08:00:00',
+    timeZone: 'America/Vancouver',
+    dailyLogText: '# 2026-03-11\n\n## 今日の予定\n- 予定なし\n',
+    agendaText: '- 予定なし'
+  });
+
+  assert.match(prompt, /前日の日次ログ:/);
+  assert.doesNotMatch(prompt, /前日締めサマリー:/);
+  assert.doesNotMatch(prompt, /内部サマリー:/);
+});
+
+test('buildDailyXPostPrompt reads from previous daily log instead of close summary', () => {
+  const prompt = buildDailyXPostPrompt({
+    dateKey: '2026-03-11',
+    localTime: '03:05:00',
+    timeZone: 'America/Vancouver',
+    conversationText: '- 会話履歴なし',
+    agendaText: '- 予定なし',
+    dailyLogText: '# 2026-03-11\n\n## ノート\n- なし\n'
+  });
+
+  assert.match(prompt, /前日の日次ログ:/);
+  assert.doesNotMatch(prompt, /前日締めサマリー:/);
+  assert.doesNotMatch(prompt, /内部サマリー:/);
+});
+
+test('prepareDailyClose writes daily log and saves only minimal close state', async () => {
+  const notificationUpdates = [];
+  const writtenRecords = [];
+
+  const result = await prepareDailyClose({
+    userId: 'user-1',
+    dateKey: '2026-03-11',
+    localTime: '03:00:00',
+    timeZone: 'UTC'
+  }, {
+    loadClosedBusinessDayConversationContextImpl: async () => ({
+      since: '2026-03-11T03:00:00.000Z',
+      until: '2026-03-12T03:00:00.000Z',
+      turns: [],
+      text: '- 会話履歴なし'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({
+        events: [{ eventId: 'evt-1', title: 'MTG', status: 'done', allDay: true, detail: '', notifyOnEnd: false }]
+      })
+    }),
+    getNotificationRecordImpl: async () => null,
+    generateCloseSummaryImpl: async () => ({
+      notes: ['進捗共有を完了した。'],
+      eventNotesById: new Map(),
+      recordMarkdown: '# 2026-03-11\n\n## 今日の予定\n- [done] 終日 MTG\n\n## ノート\n- 進捗共有を完了した。\n'
+    }),
+    writeDailyTimelineRecordImpl: async (payload) => {
+      writtenRecords.push(payload);
+    },
+    updateNotificationRecordImpl: async (payload) => {
+      notificationUpdates.push(payload);
+    }
+  });
+
+  assert.deepEqual(writtenRecords, [{
+    dateKey: '2026-03-11',
+    entryMarkdown: '# 2026-03-11\n\n## 今日の予定\n- [done] 終日 MTG\n\n## ノート\n- 進捗共有を完了した。\n'
+  }]);
+  assert.equal(notificationUpdates.length, 1);
+  assert.equal(notificationUpdates[0].slot, 'close');
+  assert.equal(notificationUpdates[0].dateKey, '2026-03-11');
+  assert.ok(notificationUpdates[0].updates.recordUpdatedAt);
+  assert.equal('summaryContextText' in notificationUpdates[0].updates, false);
+  assert.equal('summaryGeneratedAt' in notificationUpdates[0].updates, false);
+  assert.equal('summarySource' in notificationUpdates[0].updates, false);
+  assert.deepEqual(result, {
+    reusedSummary: false,
+    recordUpdated: true
+  });
+});
+
+test('runMorningPlan reads previous daily log and fails hard when it is missing', async () => {
+  await assert.rejects(
+    runMorningPlan({
+      getLocalDateContextImpl: () => ({
+        dateKey: '2026-03-12',
+        localTime: '08:00:00',
+        timeZone: 'UTC'
+      }),
+      createExecutionContextImpl: () => ({
+        getCalendarSnapshot: async () => ({ events: [] })
+      }),
+      readDailyTimelineRecordImpl: async () => {
+        throw new Error('Google Drive file not found: record/timeline/days/2026-03-11.md');
+      },
+      generateMorningGreetingImpl: async () => {
+        throw new Error('should not be called');
+      }
+    }),
+    /record\/timeline\/days\/2026-03-11\.md/
+  );
 });

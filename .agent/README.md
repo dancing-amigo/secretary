@@ -14,7 +14,7 @@
 ## ディレクトリ構成
 
 - `plans/`: 進行中または未完了の計画書
-- `docs/`: 作業時に参照する補助ドキュメント（特に `memory.md` は必読）
+- `docs/`: 作業時に参照する補助ドキュメント（特にメモリー関連のタスクをするときは `docs/memory.md` 必読）
 - `done/`: 完了済みの計画書
 
 ## 進行中プラン一覧
@@ -39,11 +39,6 @@
 - 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する
 - `memory/` は使わず、持ち越し候補や未着手項目を daily record から拾う方針を固定する
 
-### `STEP24.md`
-- `03:00` close ジョブの `summaryContextText` を廃止し、日次ログ Markdown を唯一の close 成果物に寄せる
-- 朝メッセージと X 投稿は notification state の内部サマリーではなく `record/timeline/days/YYYY-MM-DD.md` を直接読む構成へ切り替える
-- close record には重複防止と実行状態に必要な最小情報だけを残し、二重管理を解消する
-
 ### `STEP25.md`
 - `03:00` close ジョブで、前日分 `record/timeline/days/YYYY-MM-DD.md` を入力にした memory 更新を 1 日 1 回追加する
 - memory 更新は既存ノード更新、新規ノード作成、`node-registry.yaml` 更新、必要な双方向リンク更新まで含める
@@ -55,6 +50,11 @@
 - `03:00` close ジョブの日次記録保存先を `log.md` から `record/timeline/days/YYYY-MM-DD.md` の日別ファイルへ移した
 - 日次記録を `## 今日の予定` と `## ノート` の2部構成にし、予定詳細と会話由来の補足を保持する詳細ログへ切り替えた
 - `recordUpdatedAt` による保存済み判定へ移行し、日次記録からカレンダー同期失敗などの内部エラー文言を除去した
+
+### `STEP24.md`
+- `03:00` close ジョブの `summaryContextText` を廃止し、日次ログ Markdown を唯一の close 成果物に寄せた
+- 朝メッセージと X 投稿は notification state の内部サマリーではなく `record/timeline/days/YYYY-MM-DD.md` を直接読む構成へ切り替えた
+- close record には重複防止と実行状態に必要な最小情報だけを残し、二重管理を解消した
 
 ### `STEP22.md`
 - `22:00` 夜サマリー送信を廃止し、`22:00` 催促、`03:00` 内部締め、`08:00` 朝メッセージの3ジョブへ再編した

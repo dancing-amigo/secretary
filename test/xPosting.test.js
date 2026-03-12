@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   appendXMention,
+  buildDailyXPostPrompt,
+  generateDailyXPostText,
   buildXMentionSuffix,
   normalizeXPostText
 } from '../src/services/assistantEngine.js';
@@ -47,5 +49,70 @@ test('buildNightXPostFailureNotice matches the expected failure post text', () =
   assert.equal(
     buildNightXPostFailureNotice('dancing_amigo'),
     '今日のボスのサマリー投稿失敗しました... ボス、確認お願いします🙏 @dancing_amigo'
+  );
+});
+
+test('buildDailyXPostPrompt reads from previous daily log instead of close summary', () => {
+  const prompt = buildDailyXPostPrompt({
+    dateKey: '2026-03-11',
+    localTime: '03:00:00',
+    timeZone: 'UTC',
+    conversationText: '- 会話履歴なし',
+    agendaText: '- 予定なし',
+    dailyLogText: '# 2026-03-11\n\n## ノート\n- 進捗あり\n'
+  });
+
+  assert.match(prompt, /前日の日次ログ:/);
+  assert.doesNotMatch(prompt, /summaryText/);
+  assert.doesNotMatch(prompt, /内部サマリー/);
+});
+
+test('generateDailyXPostText uses daily log directly and appends mention', async () => {
+  let receivedPrompt = '';
+
+  const text = await generateDailyXPostText({
+    userId: 'user-1',
+    dateKey: '2026-03-11',
+    localTime: '03:00:00',
+    timeZone: 'UTC'
+  }, {
+    loadClosedBusinessDayConversationContextImpl: async () => ({
+      text: '- [2026-03-11 12:00:00] user: 今日も進めた'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    readDailyTimelineRecordImpl: async () => '# 2026-03-11\n\n## ノート\n- ボードゲームの作業を進めた\n',
+    createTextOutputImpl: async ({ userPrompt }) => {
+      receivedPrompt = userPrompt;
+      return '今日は着実に前進しました。';
+    }
+  });
+
+  assert.match(receivedPrompt, /前日の日次ログ:/);
+  assert.match(receivedPrompt, /ボードゲームの作業を進めた/);
+  assert.equal(text, '今日は着実に前進しました。 @dancing_amigo');
+});
+
+test('generateDailyXPostText fails hard when daily log is missing', async () => {
+  await assert.rejects(
+    generateDailyXPostText({
+      userId: 'user-1',
+      dateKey: '2026-03-11',
+      localTime: '03:00:00',
+      timeZone: 'UTC'
+    }, {
+      loadClosedBusinessDayConversationContextImpl: async () => ({ text: '- 会話履歴なし' }),
+      createExecutionContextImpl: () => ({
+        getCalendarSnapshot: async () => ({ events: [] })
+      }),
+      readDailyTimelineRecordImpl: async () => {
+        throw new Error('Google Drive file not found: record/timeline/days/2026-03-11.md');
+      },
+      createTextOutputImpl: async () => {
+        throw new Error('should not be called');
+      }
+    }),
+    /record\/timeline\/days\/2026-03-11\.md/
   );
 });

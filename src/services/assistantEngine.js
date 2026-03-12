@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { config } from '../config.js';
 import {
   getNotificationRecord,
+  readDailyTimelineRecord,
   readConversationTurns,
   readSoulMarkdown,
   readUserMarkdown,
@@ -370,15 +371,6 @@ function normalizeLogNoteList(items, limit = 20) {
     : [];
 }
 
-function formatEventLine(event) {
-  const timeText = event.allDay
-    ? 'All day'
-    : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
-  const notifyText = event.notifyOnEnd ? ' | notifyOnEnd:on' : '';
-  const detailText = event.detail ? ` | detail: ${event.detail}` : '';
-  return `- ${timeText} | ${event.title || '(no title)'} | ${event.status || 'todo'}${detailText}${notifyText}`;
-}
-
 function normalizeEventNotes(entries) {
   const noteMap = new Map();
 
@@ -437,28 +429,7 @@ export function formatDailyTimelineMarkdown({ dateKey, events, notes, eventNotes
   ].join('\n');
 }
 
-function formatCloseSummaryContext({ dateKey, events, notes, eventNotesById }) {
-  return [
-    `対象日付: ${dateKey}`,
-    '',
-    '### 今日の予定',
-    ...(events.length > 0
-      ? events.flatMap((event) => {
-          const lines = [formatEventLine(event)];
-          const supplements = eventNotesById.get(event.eventId) || [];
-          for (const supplement of supplements) {
-            lines.push(`  - 補足: ${supplement}`);
-          }
-          return lines;
-        })
-      : ['- 予定なし']),
-    '',
-    '### ノート',
-    ...(notes.length > 0 ? notes.map((item) => `- ${item}`) : ['- なし'])
-  ].join('\n');
-}
-
-function buildDailyXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText, summaryText }) {
+export function buildDailyXPostPrompt({ dateKey, localTime, timeZone, conversationText, agendaText, dailyLogText }) {
   return [
     'あなたは秘書アカウント本人として、Xに投稿する日次ポストを作成します。',
     `対象日付: ${dateKey}`,
@@ -477,8 +448,8 @@ function buildDailyXPostPrompt({ dateKey, localTime, timeZone, conversationText,
     '- 秘書らしい観察口調で、少し人間味はあってよいが長くしない',
     '- 文字数はできれば220文字以内、最大でも280文字以内',
     '',
-    '内部サマリー:',
-    summaryText,
+    '前日の日次ログ:',
+    dailyLogText,
     '',
     '当日の会話履歴:',
     conversationText,
@@ -519,7 +490,7 @@ function buildCloseSummaryPrompt({ dateKey, localTime, timeZone, conversationTex
   ].join('\n');
 }
 
-function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, summaryText, agendaText }) {
+export function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, dailyLogText, agendaText }) {
   return [
     'あなたは個人向けLINE秘書の朝メッセージ生成役です。',
     `対象日付: ${dateKey}`,
@@ -528,7 +499,7 @@ function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, summaryText,
     '',
     '目的:',
     '- ユーザーが朝に読みやすい、短く自然な日本語メッセージを1本だけ作る',
-    '- 前日締めサマリーを踏まえつつ、今日の予定を必要に応じて自然に触れる',
+    '- 前日の日次ログを踏まえつつ、今日の予定を必要に応じて自然に触れる',
     '- ユーザーの気分が少し上向くような言い方を選ぶ',
     '',
     '文面方針:',
@@ -538,12 +509,12 @@ function buildMorningGreetingPrompt({ dateKey, localTime, timeZone, summaryText,
     '- ただし長くしすぎず、朝に一目で読める簡潔さを優先する',
     '- 予定がある日は、予定一覧の丸写しではなく重要な流れだけ短く触れる',
     '- 予定がない日は、そのことを自然に伝えるか、あえて触れなくてもよい',
-    '- 前日締めサマリーから自然に接続できるなら反映する。無理に触れない',
+    '- 前日の日次ログから自然に接続できるなら反映する。無理に触れない',
     '- プレッシャーが強すぎる言い方、説教調、根拠のない断定は避ける',
     '- 絵文字、見出し、箇条書き、過度な定型フォーマットは使わない',
     '',
-    '前日締めサマリー:',
-    summaryText,
+    '前日の日次ログ:',
+    dailyLogText,
     '',
     '今日の予定一覧:',
     agendaText
@@ -758,12 +729,6 @@ async function generateCloseSummary({ dateKey, localTime, timeZone, conversation
   return {
     notes,
     eventNotesById,
-    summaryContextText: formatCloseSummaryContext({
-      dateKey,
-      events,
-      notes,
-      eventNotesById
-    }),
     recordMarkdown: formatDailyTimelineMarkdown({
       dateKey,
       events,
@@ -814,7 +779,7 @@ export function appendXMention(text, username = config.x.mentionUsername) {
   return `${trimmedBody}${suffix}`.trim();
 }
 
-async function generateMorningGreeting({ dateKey, localTime, timeZone, summaryText, events }) {
+async function generateMorningGreeting({ dateKey, localTime, timeZone, dailyLogText, events }) {
   const text = await createTextOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
@@ -822,7 +787,7 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, summaryTe
       dateKey,
       localTime,
       timeZone,
-      summaryText,
+      dailyLogText,
       agendaText: formatAgendaEventsForSummary(events)
     })
   });
@@ -832,15 +797,24 @@ async function generateMorningGreeting({ dateKey, localTime, timeZone, summaryTe
   };
 }
 
-export async function generateDailyXPostText({ userId, dateKey, localTime, timeZone = config.tz }) {
-  const conversationContext = await loadClosedBusinessDayConversationContext({ userId, dateKey, timeZone });
-  const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
+export async function generateDailyXPostText(
+  { userId, dateKey, localTime, timeZone = config.tz },
+  deps = {}
+) {
+  const {
+    loadClosedBusinessDayConversationContextImpl = loadClosedBusinessDayConversationContext,
+    createExecutionContextImpl = createExecutionContext,
+    readDailyTimelineRecordImpl = readDailyTimelineRecord,
+    createTextOutputImpl = createTextOutput
+  } = deps;
+
+  const conversationContext = await loadClosedBusinessDayConversationContextImpl({ userId, dateKey, timeZone });
+  const executionContext = createExecutionContextImpl({ dateKey, localTime, timeZone });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('close_x_post');
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
-  const closeRecord = await getNotificationRecord({ slot: 'close', dateKey });
-  const summaryText = String(closeRecord?.summaryContextText || '').trim() || '- 前日締めサマリーなし';
+  const dailyLogText = String(await readDailyTimelineRecordImpl(dateKey)).trim();
 
-  const output = await createTextOutput({
+  const output = await createTextOutputImpl({
     model: config.openai.summaryModel || config.openai.taskModel,
     systemPrompt: '完成済みの日本語ポスト本文だけを返してください。前置きや説明は不要です。',
     userPrompt: buildDailyXPostPrompt({
@@ -849,7 +823,7 @@ export async function generateDailyXPostText({ userId, dateKey, localTime, timeZ
       timeZone,
       conversationText: conversationContext.text,
       agendaText: formatAgendaEventsForSummary(events),
-      summaryText
+      dailyLogText
     })
   });
 
@@ -1104,29 +1078,48 @@ export async function processUserMessage({ userId, text }) {
   throw new Error('アクション判定に失敗しました。もう一度送ってください。');
 }
 
-export async function runMorningPlan() {
-  const dateContext = getLocalDateContext();
-  const executionContext = createExecutionContext(dateContext);
+export async function runMorningPlan(deps = {}) {
+  const {
+    getLocalDateContextImpl = getLocalDateContext,
+    createExecutionContextImpl = createExecutionContext,
+    readDailyTimelineRecordImpl = readDailyTimelineRecord,
+    generateMorningGreetingImpl = generateMorningGreeting
+  } = deps;
+
+  const dateContext = getLocalDateContextImpl();
+  const executionContext = createExecutionContextImpl(dateContext);
   const summaryDateKey = shiftDateKey(dateContext.dateKey, -1);
-  const closeRecord = await getNotificationRecord({ slot: 'close', dateKey: summaryDateKey });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('morning_plan');
-  const greeting = await generateMorningGreeting({
+  const dailyLogText = String(await readDailyTimelineRecordImpl(summaryDateKey)).trim();
+  const greeting = await generateMorningGreetingImpl({
     dateKey: dateContext.dateKey,
     localTime: dateContext.localTime,
     timeZone: dateContext.timeZone,
-    summaryText: String(closeRecord?.summaryContextText || '').trim() || '- 前日締めサマリーなし',
+    dailyLogText,
     events: Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []
   });
   return greeting.messageText;
 }
 
-export async function prepareDailyClose({ userId, dateKey, localTime, timeZone = config.tz }) {
-  const conversationContext = await loadClosedBusinessDayConversationContext({ userId, dateKey, timeZone });
-  const executionContext = createExecutionContext({ dateKey, localTime, timeZone });
+export async function prepareDailyClose(
+  { userId, dateKey, localTime, timeZone = config.tz },
+  deps = {}
+) {
+  const {
+    loadClosedBusinessDayConversationContextImpl = loadClosedBusinessDayConversationContext,
+    createExecutionContextImpl = createExecutionContext,
+    getNotificationRecordImpl = getNotificationRecord,
+    generateCloseSummaryImpl = generateCloseSummary,
+    writeDailyTimelineRecordImpl = writeDailyTimelineRecord,
+    updateNotificationRecordImpl = updateNotificationRecord
+  } = deps;
+
+  const conversationContext = await loadClosedBusinessDayConversationContextImpl({ userId, dateKey, timeZone });
+  const executionContext = createExecutionContextImpl({ dateKey, localTime, timeZone });
   const calendarSnapshot = await executionContext.getCalendarSnapshot('daily_close');
-  const existing = await getNotificationRecord({ slot: 'close', dateKey });
+  const existing = await getNotificationRecordImpl({ slot: 'close', dateKey });
   const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
-  const summary = await generateCloseSummary({
+  const summary = await generateCloseSummaryImpl({
     dateKey,
     localTime,
     timeZone,
@@ -1134,28 +1127,13 @@ export async function prepareDailyClose({ userId, dateKey, localTime, timeZone =
     events
   });
 
-  await updateNotificationRecord({
-    slot: 'close',
-    dateKey,
-    updates: {
-      summaryGeneratedAt: new Date().toISOString(),
-      summarySource: {
-        since: conversationContext.since,
-        until: conversationContext.until,
-        conversationCount: conversationContext.turns.length,
-        eventCount: events.length
-      },
-      summaryContextText: summary.summaryContextText.slice(0, 5000)
-    }
-  });
-
   let recordUpdated = false;
   if (!existing?.recordUpdatedAt && !existing?.logUpdatedAt) {
-    await writeDailyTimelineRecord({
+    await writeDailyTimelineRecordImpl({
       dateKey,
       entryMarkdown: summary.recordMarkdown
     });
-    await updateNotificationRecord({
+    await updateNotificationRecordImpl({
       slot: 'close',
       dateKey,
       updates: {
@@ -1167,8 +1145,7 @@ export async function prepareDailyClose({ userId, dateKey, localTime, timeZone =
 
   return {
     reusedSummary: false,
-    recordUpdated,
-    summaryContextText: summary.summaryContextText
+    recordUpdated
   };
 }
 

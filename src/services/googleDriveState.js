@@ -1109,6 +1109,29 @@ export async function writeDailyTimelineRecord({ dateKey, entryMarkdown }) {
   return normalizedContent;
 }
 
+export async function readDailyTimelineRecord(dateKey) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedDateKey = String(dateKey || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalizedDateKey)) {
+    throw new Error(`Invalid dateKey: ${dateKey}`);
+  }
+
+  const fileId = await findDriveFileIdByPath({
+    parentId: config.googleDrive.folderId,
+    pathSegments: [...DAILY_TIMELINE_FOLDER_PATH, `${normalizedDateKey}.md`]
+  });
+
+  if (!fileId) {
+    throw new Error(`Google Drive file not found: ${DAILY_TIMELINE_FOLDER_PATH.join('/')}/${normalizedDateKey}.md`);
+  }
+
+  return readDriveTextFile(fileId);
+}
+
 export async function getNotificationRecord({ slot, dateKey }) {
   const configError = driveStateConfigError();
   if (configError) {

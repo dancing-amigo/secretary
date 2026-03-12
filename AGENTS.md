@@ -1,7 +1,9 @@
 # Agent Workspace Notes
 
 - プロジェクト固有の作業メモと計画は `.agent/` を参照すること。
-- 作業開始時は、まず `.agent/README.md` を読んで `plans/` と `done/` の一覧・要約を把握すること。
+- 作業開始時は、まず `.agent/README.md` を読んで `docs/` `plans/` と `done/` の一覧・要約を把握すること。
+- 実作業に入る前に、`.agent/docs/memory.md` を必ず読むこと。
+- その後、必要な補助ドキュメントを `.agent/docs/` から確認すること。
 - 実行計画は `.agent/plans/` 配下の Markdown ファイルを優先的に確認すること。
 - 完了したプランの Markdown ファイルは `.agent/done/` に移動すること。
 - プラン完了時の `.agent/plans/` から `.agent/done/` への移動は、常にエージェントが自分で実行すること。

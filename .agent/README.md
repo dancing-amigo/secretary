@@ -1,20 +1,28 @@
 # .agent README
 
-`.agent/` は、このプロジェクトでエージェントが参照する作業メモ・計画・完了履歴のハブです。
-この README は単なる構成説明ではなく、`plans/` と `done/` の内容を素早く把握するための索引として維持します。
+`.agent/` は、このプロジェクトでエージェントが参照する作業メモ・計画・補助ドキュメント・完了履歴のハブです。
+この README は単なる構成説明ではなく、`docs/` `plans/` と `done/` の内容を素早く把握するための索引として維持します。
 
 ## 参照順
 
-1. まずこの `README.md` を読んで、進行中プランと完了済みプランの全体像を把握する
-2. 次に対象の詳細 Markdown を `plans/` または `done/` から開く
-3. 実作業後、状態変化があればこの README の一覧も更新する
+1. まずこの `README.md` を読んで、補助ドキュメント・進行中プラン・完了済みプランの全体像を把握する
+2. 次に `docs/memory.md` を必ず読む
+3. その後、必要な補助資料を `docs/` から確認する
+4. 続けて、対象の詳細 Markdown を `plans/` または `done/` から開く
+5. 実作業後、状態変化があればこの README の一覧も更新する
 
 ## ディレクトリ構成
 
 - `plans/`: 進行中または未完了の計画書
+- `docs/`: 作業時に参照する補助ドキュメント（特に `memory.md` は必読）
 - `done/`: 完了済みの計画書
 
 ## 進行中プラン一覧
+
+### `STEP28.md`
+- LINE の `userId` を memory の `People/*.md` と紐づけ、visitor が誰でどんな役割かを人物記憶から解決する
+- 人物記憶に role / relationship / allowedScopes を持たせ、owner 基準で visitor ごとの閲覧可能範囲を定義できるようにする
+- Step27 の read-only 候補返答をそのまま返さず、permission review 用 LLM で最終審査し、未登録 visitor や権限外情報を拒否・マスクする
 
 ### `STEP27.md`
 - LINE送信者を owner と visitor に分離し、非オーナー向けの read-only 応答ルートを追加する

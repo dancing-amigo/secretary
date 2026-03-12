@@ -1,9 +1,10 @@
 import express from 'express';
 import { requireCronAuth } from '../api/_lib/cronAuth.js';
+import { config } from './config.js';
 import { appendConversationTurn } from './services/googleDriveState.js';
 import { runEventReminderDelivery } from './services/eventReminders.js';
 import { verifyLineSignature, replyMessage } from './services/lineClient.js';
-import { processUserMessage } from './services/assistantEngine.js';
+import { processLineMessage } from './services/assistantEngine.js';
 
 export const app = express();
 
@@ -35,7 +36,12 @@ app.post('/webhook/line', express.raw({ type: '*/*' }), async (req, res) => {
     try {
       await appendConversationTurn({ userId, role: 'user', text: userText });
 
-      const replyText = await processUserMessage({ userId, text: userText });
+      const replyText = await processLineMessage({
+        senderUserId: userId,
+        ownerUserId: config.line.defaultUserId,
+        senderRole: userId === config.line.defaultUserId ? 'owner' : 'visitor',
+        text: userText
+      });
       await replyMessage(event.replyToken, replyText);
       try {
         await appendConversationTurn({ userId, role: 'assistant', text: replyText });

@@ -70,11 +70,27 @@ function extractStructuredContent(response) {
   return content;
 }
 
-async function buildInjectedSystemPrompt(systemPrompt) {
-  const [soulMarkdown, userMarkdown] = await Promise.all([
-    readSoulMarkdown(),
-    readUserMarkdown()
+async function loadProfileMarkdown(profileContext = {}) {
+  const soulMarkdown = profileContext.soulMarkdown;
+  const userMarkdown = profileContext.userMarkdown;
+
+  if (typeof soulMarkdown === 'string' && typeof userMarkdown === 'string') {
+    return { soulMarkdown, userMarkdown };
+  }
+
+  const [loadedSoulMarkdown, loadedUserMarkdown] = await Promise.all([
+    typeof soulMarkdown === 'string' ? soulMarkdown : readSoulMarkdown(),
+    typeof userMarkdown === 'string' ? userMarkdown : readUserMarkdown()
   ]);
+
+  return {
+    soulMarkdown: loadedSoulMarkdown,
+    userMarkdown: loadedUserMarkdown
+  };
+}
+
+export async function buildInjectedSystemPrompt(systemPrompt, options = {}) {
+  const { soulMarkdown, userMarkdown } = await loadProfileMarkdown(options.profileContext);
 
   return [
     '以下の順序で与える固定コンテキストを、以後の全応答で必ず優先して参照してください。',
@@ -90,14 +106,14 @@ async function buildInjectedSystemPrompt(systemPrompt) {
   ].join('\n');
 }
 
-export async function createTextOutput({ model, systemPrompt, userPrompt }) {
+export async function createTextOutput({ model, systemPrompt, userPrompt, profileContext }) {
   const configError = llmConfigError();
   if (configError) {
     throw new Error(configError);
   }
 
   try {
-    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
+    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt, { profileContext });
     const response = await postChatCompletion({
       model,
       messages: [
@@ -112,14 +128,14 @@ export async function createTextOutput({ model, systemPrompt, userPrompt }) {
   }
 }
 
-export async function createStructuredOutput({ model, schemaName, schema, systemPrompt, userPrompt }) {
+export async function createStructuredOutput({ model, schemaName, schema, systemPrompt, userPrompt, profileContext }) {
   const configError = llmConfigError();
   if (configError) {
     throw new Error(configError);
   }
 
   try {
-    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt);
+    const injectedSystemPrompt = await buildInjectedSystemPrompt(systemPrompt, { profileContext });
     const response = await postChatCompletion({
       model,
       messages: [

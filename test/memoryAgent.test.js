@@ -337,3 +337,32 @@ test('answerFromMemory still builds a no-info reply when no relevant nodes were 
   assert.match(capturedPrompt, /情報が見つからない場合は、その旨を明確に伝える/);
   assert.match(capturedPrompt, /relevant memory nodes: none/);
 });
+
+test('answerFromMemory forwards profileContext to model calls', async () => {
+  const profileScopes = [];
+
+  const reply = await answerFromMemory({
+    text: 'わかる？',
+    conversationContext: { text: '- 会話履歴なし' },
+    dateContext: { dateKey: '2026-03-10', localTime: '12:00:00', timeZone: 'America/Vancouver' },
+    profileContext: { scope: 'owner_readonly' }
+  }, {
+    loadMemoryStore: async () => ({
+      indexMarkdown: '# memory index',
+      registryEntries: [],
+      registryById: new Map(),
+      registryByPath: new Map()
+    }),
+    createStructuredOutput: async ({ profileContext }) => {
+      profileScopes.push(profileContext?.scope || '');
+      return { nodes: [] };
+    },
+    createTextOutput: async ({ profileContext }) => {
+      profileScopes.push(profileContext?.scope || '');
+      return '見つかりませんでした。';
+    }
+  });
+
+  assert.equal(reply, '見つかりませんでした。');
+  assert.deepEqual(profileScopes, ['owner_readonly', 'owner_readonly']);
+});

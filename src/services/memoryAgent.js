@@ -247,13 +247,15 @@ async function selectPrimaryNodes({
   conversationContext,
   indexMarkdown,
   registryEntries,
-  createStructuredOutputFn
+  createStructuredOutputFn,
+  profileContext
 }) {
   const raw = await createStructuredOutputFn({
     model: config.openai.taskModel,
     schemaName: 'memory_primary_selection',
     schema: MEMORY_SELECTION_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    profileContext,
     userPrompt: buildPrimarySelectionPrompt({
       text,
       ...dateContext,
@@ -276,7 +278,8 @@ async function selectSecondaryNodes({
   conversationContext,
   primaryNodes,
   linkedEntriesByPrimaryId,
-  createStructuredOutputFn
+  createStructuredOutputFn,
+  profileContext
 }) {
   const allowedIds = Array.from(new Set(
     primaryNodes.flatMap((node) => (linkedEntriesByPrimaryId.get(node.entry.id) || []).map(({ entry }) => entry.id))
@@ -291,6 +294,7 @@ async function selectSecondaryNodes({
     schemaName: 'memory_secondary_selection',
     schema: MEMORY_SELECTION_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    profileContext,
     userPrompt: buildSecondarySelectionPrompt({
       text,
       ...dateContext,
@@ -309,11 +313,13 @@ async function generateMemoryReply({
   conversationContext,
   primaryNodes,
   secondaryNodes,
-  createTextOutputFn
+  createTextOutputFn,
+  profileContext
 }) {
   return createTextOutputFn({
     model: config.openai.taskModel,
     systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+    profileContext,
     userPrompt: buildMemoryReplyPrompt({
       text,
       ...dateContext,
@@ -335,7 +341,7 @@ function normalizeMemoryReply(value) {
 }
 
 export async function answerFromMemory(
-  { text, conversationContext, dateContext },
+  { text, conversationContext, dateContext, profileContext },
   deps = {}
 ) {
   const loadMemoryStoreFn = deps.loadMemoryStore || loadMemoryStore;
@@ -362,7 +368,8 @@ export async function answerFromMemory(
       conversationContext,
       indexMarkdown: memoryStore.indexMarkdown,
       registryEntries: memoryStore.registryEntries,
-      createStructuredOutputFn
+      createStructuredOutputFn,
+      profileContext
     });
 
     const primaryNodes = await Promise.all(
@@ -386,7 +393,8 @@ export async function answerFromMemory(
       conversationContext,
       primaryNodes,
       linkedEntriesByPrimaryId,
-      createStructuredOutputFn
+      createStructuredOutputFn,
+      profileContext
     });
 
     const secondaryNodes = await Promise.all(
@@ -403,7 +411,8 @@ export async function answerFromMemory(
       conversationContext,
       primaryNodes,
       secondaryNodes,
-      createTextOutputFn
+      createTextOutputFn,
+      profileContext
     });
 
     const normalizedReply = normalizeMemoryReply(reply);

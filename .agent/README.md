@@ -29,11 +29,6 @@
 - 人物記憶に role / relationship / allowedScopes を持たせ、owner 基準で visitor ごとの閲覧可能範囲を定義できるようにする
 - Step27 の read-only 候補返答をそのまま返さず、permission review 用 LLM で最終審査し、未登録 visitor や権限外情報を拒否・マスクする
 
-### `STEP27.md`
-- LINE送信者を owner と visitor に分離し、非オーナー向けの read-only 応答ルートを追加する
-- visitor はオーナーの今日の予定、`memory` 参照、一般質問応答まで許可し、Calendar や `SOUL.md` / `USER.md` などの mutation は拒否する
-- 次の権限設定 Step に備え、送信者の会話履歴とオーナー情報参照の境界を分けた routing / 実行構造を先に整える
-
 ### `STEP26.md`
 - 朝ジョブの入力を前日 summary 依存から、前日分と直近3日分の `record/timeline/days/YYYY-MM-DD.md` 参照へ寄せる
 - 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する
@@ -65,6 +60,11 @@
 - Google Drive 上の `memory/` フォルダを探索する独立 `memory` アクションを追加した
 - flow は `ActionClassifier -> primary 候補選定 -> primary 本文読取 -> secondary 候補選定 -> 最終返答生成` の段階型で実装した
 - 初期版は `memory` アクション単体で閉じ、primary 3 / secondary 3 / 1-hop 上限と、情報不足時に推測しない返答方針を固定した
+
+### `STEP27.md`
+- LINE webhook で送信者を owner / visitor に分岐し、visitor には read-only 専用フローを追加した
+- visitor は自分の会話履歴だけを使いながら、オーナーの今日の予定参照、`memory` 参照、一般質問応答だけを実行できる
+- visitor の予定更新、`SOUL.md` / `USER.md` 更新、記憶更新などの mutation は固定文面で拒否し、OpenAI の profile 注入点も将来差し替え可能に整理した
 
 ### `STEP1.md`
 - 自由文入力を LLM で解釈し、`save_tasks` / `list_tasks` / `others` を判定する基盤

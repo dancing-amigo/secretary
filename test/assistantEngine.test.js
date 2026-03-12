@@ -5,13 +5,16 @@ import {
   ACTION_SCHEMA,
   AGENDA_REWRITE_SCHEMA,
   CLOSE_SUMMARY_SCHEMA,
+  VISITOR_ACTION_SCHEMA,
   buildActiveConversationWindow,
   buildActionPrompt,
+  buildVisitorActionPrompt,
   buildClosedBusinessDayWindow,
   buildDailyXPostPrompt,
   buildMorningGreetingPrompt,
   formatDailyTimelineMarkdown,
   normalizeAgendaEventsFromModel,
+  processLineMessage,
   prepareDailyClose,
   runMorningPlan
 } from '../src/services/assistantEngine.js';
@@ -33,6 +36,30 @@ test('buildActionPrompt explains when memory should be selected', () => {
   assert.match(prompt, /次の6つから必ず1つだけ選んでください。/);
   assert.match(prompt, /- memory: /);
   assert.match(prompt, /長期に保持された人物、所属、過去イベント、継続プロジェクト、背景事情などの記憶参照が主目的なら memory を選ぶ。/);
+});
+
+test('VISITOR_ACTION_SCHEMA exposes read-only visitor actions including forbidden_action', () => {
+  assert.deepEqual(VISITOR_ACTION_SCHEMA.properties.action.enum, [
+    'list_events',
+    'memory',
+    'others',
+    'forbidden_action'
+  ]);
+});
+
+test('buildVisitorActionPrompt routes mutation requests to forbidden_action', () => {
+  const prompt = buildVisitorActionPrompt({
+    text: '予定を追加して',
+    dateKey: '2026-03-10',
+    localTime: '12:00:00',
+    timeZone: 'America/Vancouver',
+    conversationText: '- 会話履歴なし',
+    agendaContext: '- 予定なし'
+  });
+
+  assert.match(prompt, /forbidden_action/);
+  assert.match(prompt, /予定の追加、変更、削除、完了報告、代理実行は forbidden_action を最優先する。/);
+  assert.match(prompt, /SOUL\.md や USER\.md を変えてほしい依頼/);
 });
 
 test('AGENDA_REWRITE_SCHEMA requires every event item property for strict mode', () => {
@@ -309,4 +336,194 @@ test('runMorningPlan reads previous daily log and fails hard when it is missing'
     }),
     /record\/timeline\/days\/2026-03-11\.md/
   );
+});
+
+test('processLineMessage keeps owner route behavior for modify_events', async () => {
+  const calls = [];
+
+  const reply = await processLineMessage({
+    senderUserId: 'owner-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'owner',
+    text: '予定を追加して'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async ({ userId }) => ({
+      text: `conversation:${userId}`
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async (operation) => {
+        calls.push(['calendar', operation]);
+        return {
+          events: [{ eventId: 'evt-1', title: '既存予定', status: 'todo', allDay: true, detail: '', notifyOnEnd: false }]
+        };
+      }
+    }),
+    classifyActionImpl: async () => ({ action: 'modify_events', reason: 'owner update' }),
+    rewriteAgendaEventsImpl: async ({ userId, profileContext }) => {
+      calls.push(['rewrite', userId, profileContext?.scope]);
+      return {
+        outcome: 'updated',
+        message: '更新しました。',
+        events: [{
+          id: 'evt-1',
+          isNew: false,
+          title: '既存予定',
+          status: 'done',
+          notifyOnEnd: false,
+          detail: '',
+          allDay: true,
+          startTime: '',
+          endTime: ''
+        }]
+      };
+    },
+    reconcileAgendaEventsForDateImpl: async ({ nextEvents }) => {
+      calls.push(['reconcile', nextEvents[0].status]);
+      return { enabled: true, failed: 0, retryable: 0 };
+    },
+    pullGoogleCalendarEventsForDateImpl: async () => ({
+      failed: false,
+      events: []
+    }),
+    reconcileReminderSchedulesForDateImpl: async ({ dateKey }) => {
+      calls.push(['reminder', dateKey]);
+    }
+  });
+
+  assert.equal(reply, '更新しました。');
+  assert.deepEqual(calls, [
+    ['calendar', 'line_message_owner'],
+    ['rewrite', 'owner-1', 'owner_readonly'],
+    ['reconcile', 'done'],
+    ['reminder', '2026-03-12']
+  ]);
+});
+
+test('processLineMessage returns owner agenda for visitor list_events', async () => {
+  const reply = await processLineMessage({
+    senderUserId: 'visitor-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '今日の予定は？'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async ({ userId }) => ({
+      text: `conversation:${userId}`
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async (operation) => {
+        assert.equal(operation, 'line_message_visitor');
+        return {
+          events: [{ eventId: 'evt-1', title: '打ち合わせ', status: 'todo', allDay: false, startTime: '10:00:00', endTime: '11:00:00', detail: '', notifyOnEnd: false }]
+        };
+      }
+    }),
+    classifyVisitorActionImpl: async ({ conversationContext, profileContext }) => {
+      assert.equal(conversationContext.text, 'conversation:visitor-1');
+      assert.equal(profileContext.scope, 'owner_readonly');
+      return { action: 'list_events', reason: 'read only' };
+    }
+  });
+
+  assert.match(reply, /^このアカウントのオーナーの今日の予定です。/);
+  assert.match(reply, /10:00-11:00 \[todo\]/);
+  assert.match(reply, /打ち合わせ/);
+});
+
+test('processLineMessage rejects visitor mutation requests without side effects', async () => {
+  let sideEffectCount = 0;
+
+  const reply = await processLineMessage({
+    senderUserId: 'visitor-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '予定を追加して'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async ({ userId }) => ({
+      text: `conversation:${userId}`
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    classifyVisitorActionImpl: async () => ({ action: 'forbidden_action', reason: 'mutation' }),
+    reconcileAgendaEventsForDateImpl: async () => {
+      sideEffectCount += 1;
+    },
+    writeSoulMarkdownImpl: async () => {
+      sideEffectCount += 1;
+    },
+    writeUserMarkdownImpl: async () => {
+      sideEffectCount += 1;
+    }
+  });
+
+  assert.match(reply, /予定の追加や変更、プロフィールや記憶の更新はできません/);
+  assert.equal(sideEffectCount, 0);
+});
+
+test('processLineMessage uses sender conversation for visitor memory and others', async () => {
+  const calls = [];
+
+  const deps = {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async ({ userId }) => ({
+      text: `conversation:${userId}`
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    answerFromMemoryImpl: async ({ conversationContext, profileContext }) => {
+      calls.push(['memory', conversationContext.text, profileContext?.scope]);
+      return 'memory reply';
+    },
+    generateOthersReplyImpl: async ({ conversationContext, profileContext }) => {
+      calls.push(['others', conversationContext.text, profileContext?.scope]);
+      return 'others reply';
+    }
+  };
+
+  const memoryReply = await processLineMessage({
+    senderUserId: 'visitor-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '覚えてる？'
+  }, {
+    ...deps,
+    classifyVisitorActionImpl: async () => ({ action: 'memory', reason: 'memory' })
+  });
+
+  const othersReply = await processLineMessage({
+    senderUserId: 'visitor-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '雑談しよう'
+  }, {
+    ...deps,
+    classifyVisitorActionImpl: async () => ({ action: 'others', reason: 'chat' })
+  });
+
+  assert.equal(memoryReply, 'memory reply');
+  assert.equal(othersReply, 'others reply');
+  assert.deepEqual(calls, [
+    ['memory', 'conversation:visitor-1', 'owner_readonly'],
+    ['others', 'conversation:visitor-1', 'owner_readonly']
+  ]);
 });

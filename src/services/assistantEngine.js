@@ -29,6 +29,19 @@ export const ACTION_SCHEMA = {
   }
 };
 
+export const VISITOR_ACTION_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['action', 'reason'],
+  properties: {
+    action: {
+      type: 'string',
+      enum: ['list_events', 'memory', 'others', 'forbidden_action']
+    },
+    reason: { type: 'string' }
+  }
+};
+
 const PROFILE_EDIT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -167,6 +180,42 @@ export function buildActionPrompt({ text, dateKey, localTime, timeZone, conversa
     conversationText,
     '',
     '今日の予定一覧:',
+    agendaContext,
+    '',
+    'ユーザーメッセージ:',
+    text
+  ].join('\n');
+}
+
+export function buildVisitorActionPrompt({ text, dateKey, localTime, timeZone, conversationText, agendaContext }) {
+  return [
+    'あなたは個人向けLINE秘書の visitor 向けアクション分類器です。',
+    `現在のローカル日付: ${dateKey}`,
+    `現在のローカル時刻: ${localTime}`,
+    `タイムゾーン: ${timeZone}`,
+    '',
+    '次の4つから必ず1つだけ選んでください。',
+    '- list_events: このアカウントのオーナーの今日の予定一覧を知りたい意図の発話。',
+    '- memory: オーナーの長期記憶ストアを参照して答えるのが主目的の質問や確認。',
+    '- others: 雑談、一般質問、相談、確認依頼など、read-only の範囲で自然に返答すべき発話。',
+    '- forbidden_action: 予定の追加・変更・削除・完了、SOUL.md/USER.md 更新、記憶の保存や変更など、mutation を要求する発話。',
+    '',
+    '優先順位:',
+    '- 予定の追加、変更、削除、完了報告、代理実行は forbidden_action を最優先する。',
+    '- SOUL.md や USER.md を変えてほしい依頼、今後覚えてほしいことを保存してほしい依頼、記憶の追加や修正依頼も forbidden_action にする。',
+    '- オーナーの今日の予定一覧だけを知りたい依頼は list_events を優先する。',
+    '- 長期記憶の参照が主目的なら memory を選ぶ。',
+    '- read-only で答えられる雑談や一般質問は others にする。',
+    '- mutation を伴うことを実行したふりはしない。',
+    '',
+    '自然な日本語として広く解釈してください。',
+    'この段階では実行や変更はしません。',
+    'JSONオブジェクトのみを返してください。',
+    '',
+    '送信者本人との当日会話履歴:',
+    conversationText,
+    '',
+    'このアカウントのオーナーの今日の予定一覧:',
     agendaContext,
     '',
     'ユーザーメッセージ:',
@@ -661,12 +710,24 @@ async function classifyAction({ text, dateContext, conversationContext, agendaCo
   });
 }
 
-async function rewriteAgendaEvents({ text, dateContext, conversationContext, agendaContext, userId }) {
+async function classifyVisitorAction({ text, dateContext, conversationContext, agendaContext, profileContext }) {
+  return createStructuredOutput({
+    model: config.openai.actionModel,
+    schemaName: 'visitor_action_plan',
+    schema: VISITOR_ACTION_SCHEMA,
+    systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    profileContext,
+    userPrompt: buildVisitorActionPrompt({ text, ...dateContext, conversationText: conversationContext.text, agendaContext })
+  });
+}
+
+async function rewriteAgendaEvents({ text, dateContext, conversationContext, agendaContext, userId, profileContext }) {
   return createStructuredOutput({
     model: config.openai.taskModel,
     schemaName: 'agenda_rewrite',
     schema: AGENDA_REWRITE_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    profileContext,
     userPrompt: buildAgendaRewritePrompt({
       text,
       ...dateContext,
@@ -682,7 +743,8 @@ async function editProfileFile({
   text,
   conversationContext,
   soulMarkdown,
-  userMarkdown
+  userMarkdown,
+  profileContext
 }) {
   const currentContent = targetFile === 'SOUL.md' ? soulMarkdown : userMarkdown;
   return createStructuredOutput({
@@ -690,6 +752,7 @@ async function editProfileFile({
     schemaName: targetFile === 'SOUL.md' ? 'edit_soul_result' : 'edit_user_result',
     schema: PROFILE_EDIT_SCHEMA,
     systemPrompt: '必ずスキーマに一致する正しいJSONオブジェクトだけを返してください。',
+    profileContext,
     userPrompt: buildProfileEditPrompt({
       targetFile,
       userMessage: text,
@@ -779,10 +842,11 @@ export function appendXMention(text, username = config.x.mentionUsername) {
   return `${trimmedBody}${suffix}`.trim();
 }
 
-async function generateMorningGreeting({ dateKey, localTime, timeZone, dailyLogText, events }) {
+async function generateMorningGreeting({ dateKey, localTime, timeZone, dailyLogText, events, profileContext }) {
   const text = await createTextOutput({
     model: config.openai.summaryModel || config.openai.taskModel,
     systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+    profileContext,
     userPrompt: buildMorningGreetingPrompt({
       dateKey,
       localTime,
@@ -845,10 +909,11 @@ function normalizeOthersMessage(value) {
   return normalized || 'どう返すのがよいか少し迷いました。必要ならもう少し詳しく教えてください。';
 }
 
-async function generateOthersReply({ text, dateContext, conversationContext }) {
+async function generateOthersReply({ text, dateContext, conversationContext, profileContext }) {
   const output = await createTextOutput({
     model: config.openai.taskModel,
     systemPrompt: '完成済みの日本語メッセージ本文だけを返してください。前置きや説明は不要です。',
+    profileContext,
     userPrompt: buildOthersReplyPrompt({
       text,
       ...dateContext,
@@ -859,12 +924,15 @@ async function generateOthersReply({ text, dateContext, conversationContext }) {
   return normalizeOthersMessage(output);
 }
 
-function formatAgendaList(events) {
+function formatAgendaList(events, options = {}) {
+  const header = String(options.header || '').trim() || '今日の予定です。';
   if (events.length === 0) {
-    return '今日の予定はありません。';
+    return header === '今日の予定です。'
+      ? '今日の予定はありません。'
+      : `${header}\n予定はありません。`;
   }
 
-  const lines = ['今日の予定です。'];
+  const lines = [header];
   for (const event of events) {
     const prefix = event.allDay
       ? '終日'
@@ -955,29 +1023,82 @@ export function normalizeAgendaEventsFromModel(events, currentEventsById) {
   return normalized;
 }
 
-export async function processUserMessage({ userId, text }) {
-  const rawText = String(text || '').trim();
-  if (!rawText) {
-    return 'OK';
-  }
+function normalizeActorContext({ senderUserId, ownerUserId, senderRole }) {
+  const normalizedSenderUserId = String(senderUserId || '').trim();
+  const normalizedOwnerUserId = String(ownerUserId || '').trim();
+  const normalizedSenderRole = senderRole === 'visitor' ? 'visitor' : 'owner';
 
-  const dateContext = getLocalDateContext();
-  const conversationContext = await loadConversationContext({ userId, ...dateContext });
-  const executionContext = createExecutionContext(dateContext);
-  const calendarSnapshot = await executionContext.getCalendarSnapshot('line_message');
-  const agendaContext = formatAgendaContext(calendarSnapshot);
+  return {
+    senderUserId: normalizedSenderUserId,
+    ownerUserId: normalizedOwnerUserId || normalizedSenderUserId,
+    senderRole: normalizedSenderRole,
+    conversationUserId: normalizedSenderUserId,
+    profileScope: 'owner_readonly',
+    profileContext: {
+      scope: 'owner_readonly'
+    }
+  };
+}
 
-  const actionPlan = await classifyAction({ text: rawText, dateContext, conversationContext, agendaContext });
+function buildForbiddenActionReply() {
+  return 'このアカウントでは予定の追加や変更、プロフィールや記憶の更新はできません。できるのは、このアカウントのオーナーの今日の予定確認、記憶の参照、一般的な質問への返答までです。';
+}
+
+async function buildLineMessageContext(actorContext, deps = {}) {
+  const {
+    getLocalDateContextImpl = getLocalDateContext,
+    loadConversationContextImpl = loadConversationContext,
+    createExecutionContextImpl = createExecutionContext
+  } = deps;
+
+  const dateContext = getLocalDateContextImpl();
+  const conversationContext = await loadConversationContextImpl({
+    userId: actorContext.conversationUserId,
+    ...dateContext
+  });
+  const executionContext = createExecutionContextImpl(dateContext);
+  const calendarSnapshot = await executionContext.getCalendarSnapshot(
+    actorContext.senderRole === 'visitor' ? 'line_message_visitor' : 'line_message_owner'
+  );
+
+  return {
+    actorContext,
+    dateContext,
+    conversationContext,
+    calendarSnapshot,
+    agendaContext: formatAgendaContext(calendarSnapshot)
+  };
+}
+
+async function processOwnerMessage(rawText, lineContext, deps = {}) {
+  const {
+    classifyActionImpl = classifyAction,
+    rewriteAgendaEventsImpl = rewriteAgendaEvents,
+    reconcileAgendaEventsForDateImpl = reconcileAgendaEventsForDate,
+    pullGoogleCalendarEventsForDateImpl = pullGoogleCalendarEventsForDate,
+    reconcileReminderSchedulesForDateImpl = reconcileReminderSchedulesForDate,
+    answerFromMemoryImpl = answerFromMemory,
+    readSoulMarkdownImpl = readSoulMarkdown,
+    readUserMarkdownImpl = readUserMarkdown,
+    editProfileFileImpl = editProfileFile,
+    writeSoulMarkdownImpl = writeSoulMarkdown,
+    writeUserMarkdownImpl = writeUserMarkdown,
+    generateOthersReplyImpl = generateOthersReply
+  } = deps;
+  const { actorContext, dateContext, conversationContext, calendarSnapshot, agendaContext } = lineContext;
+  const profileContext = actorContext.profileContext;
+  const actionPlan = await classifyActionImpl({ text: rawText, dateContext, conversationContext, agendaContext });
 
   if (actionPlan.action === 'modify_events') {
     const currentEvents = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
     const currentEventsById = new Map(currentEvents.map((event) => [String(event.eventId || '').trim(), event]));
-    const rewriteResult = await rewriteAgendaEvents({
+    const rewriteResult = await rewriteAgendaEventsImpl({
       text: rawText,
       dateContext,
       conversationContext,
-      userId,
-      agendaContext
+      userId: actorContext.senderUserId,
+      agendaContext,
+      profileContext
     });
 
     if (rewriteResult.outcome === 'clarify') {
@@ -985,8 +1106,7 @@ export async function processUserMessage({ userId, text }) {
     }
 
     const nextEvents = normalizeAgendaEventsFromModel(rewriteResult.events, currentEventsById);
-
-    const calendarSyncResult = await reconcileAgendaEventsForDate({
+    const calendarSyncResult = await reconcileAgendaEventsForDateImpl({
       dateKey: dateContext.dateKey,
       currentEvents,
       nextEvents
@@ -998,12 +1118,12 @@ export async function processUserMessage({ userId, text }) {
     };
 
     try {
-      const latestCalendarSnapshot = await pullGoogleCalendarEventsForDate({
+      const latestCalendarSnapshot = await pullGoogleCalendarEventsForDateImpl({
         dateKey: dateContext.dateKey,
         operation: 'event_reminder_reconcile'
       });
       if (!latestCalendarSnapshot.failed) {
-        await reconcileReminderSchedulesForDate({
+        await reconcileReminderSchedulesForDateImpl({
           dateKey: dateContext.dateKey,
           events: latestCalendarSnapshot.events
         });
@@ -1032,25 +1152,27 @@ export async function processUserMessage({ userId, text }) {
   }
 
   if (actionPlan.action === 'memory') {
-    return answerFromMemory({
+    return answerFromMemoryImpl({
       text: rawText,
       dateContext,
-      conversationContext
+      conversationContext,
+      profileContext
     });
   }
 
   if (actionPlan.action === 'edit_soul' || actionPlan.action === 'edit_user') {
     const [soulMarkdown, userMarkdown] = await Promise.all([
-      readSoulMarkdown(),
-      readUserMarkdown()
+      readSoulMarkdownImpl(),
+      readUserMarkdownImpl()
     ]);
     const targetFile = actionPlan.action === 'edit_soul' ? 'SOUL.md' : 'USER.md';
-    const editResult = await editProfileFile({
+    const editResult = await editProfileFileImpl({
       targetFile,
       text: rawText,
       conversationContext,
       soulMarkdown,
-      userMarkdown
+      userMarkdown,
+      profileContext
     });
 
     if (editResult.outcome === 'clarify') {
@@ -1059,23 +1181,88 @@ export async function processUserMessage({ userId, text }) {
 
     const updatedContent = normalizeProfileEditContent(editResult.updatedContent);
     if (targetFile === 'SOUL.md') {
-      await writeSoulMarkdown(updatedContent);
+      await writeSoulMarkdownImpl(updatedContent);
     } else {
-      await writeUserMarkdown(updatedContent);
+      await writeUserMarkdownImpl(updatedContent);
     }
 
     return String(editResult.message || '').trim() || `${targetFile} を更新しました。`;
   }
 
   if (actionPlan.action === 'others') {
-    return generateOthersReply({
+    return generateOthersReplyImpl({
       text: rawText,
       dateContext,
-      conversationContext
+      conversationContext,
+      profileContext
     });
   }
 
   throw new Error('アクション判定に失敗しました。もう一度送ってください。');
+}
+
+async function processVisitorMessage(rawText, lineContext, deps = {}) {
+  const {
+    classifyVisitorActionImpl = classifyVisitorAction,
+    answerFromMemoryImpl = answerFromMemory,
+    generateOthersReplyImpl = generateOthersReply
+  } = deps;
+  const { actorContext, dateContext, conversationContext, calendarSnapshot, agendaContext } = lineContext;
+  const profileContext = actorContext.profileContext;
+  const actionPlan = await classifyVisitorActionImpl({
+    text: rawText,
+    dateContext,
+    conversationContext,
+    agendaContext,
+    profileContext
+  });
+
+  if (actionPlan.action === 'list_events') {
+    return formatAgendaList(
+      Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [],
+      { header: 'このアカウントのオーナーの今日の予定です。' }
+    );
+  }
+
+  if (actionPlan.action === 'memory') {
+    return answerFromMemoryImpl({
+      text: rawText,
+      dateContext,
+      conversationContext,
+      profileContext
+    });
+  }
+
+  if (actionPlan.action === 'others') {
+    return generateOthersReplyImpl({
+      text: rawText,
+      dateContext,
+      conversationContext,
+      profileContext
+    });
+  }
+
+  if (actionPlan.action === 'forbidden_action') {
+    return buildForbiddenActionReply();
+  }
+
+  throw new Error('アクション判定に失敗しました。もう一度送ってください。');
+}
+
+export async function processLineMessage({ senderUserId, ownerUserId, senderRole, text }, deps = {}) {
+  const rawText = String(text || '').trim();
+  if (!rawText) {
+    return 'OK';
+  }
+
+  const actorContext = normalizeActorContext({ senderUserId, ownerUserId, senderRole });
+  const lineContext = await buildLineMessageContext(actorContext, deps);
+
+  if (actorContext.senderRole === 'visitor') {
+    return processVisitorMessage(rawText, lineContext, deps);
+  }
+
+  return processOwnerMessage(rawText, lineContext, deps);
 }
 
 export async function runMorningPlan(deps = {}) {

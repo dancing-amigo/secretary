@@ -19,6 +19,11 @@
 
 ## 進行中プラン一覧
 
+### `STEP29.md`
+- `03:00` close ジョブの daily log 入力に、Google Drive `record/audio` 配下の前日 transcript `.txt` を追加する
+- transcript は将来の音声ファイル対応を見越した `audio processor` で処理し、ユーザー本人に関連する発話・思考・会話・記憶候補を抽出する
+- processor 出力を daily log 作成エージェントへ渡し、結果も `record/audio-processed` に永続保存できるようにする
+
 ### `STEP28.md`
 - LINE の `userId` を memory の `People/*.md` と紐づけ、visitor が誰でどんな役割かを人物記憶から解決する
 - 人物記憶に role / relationship / allowedScopes を持たせ、owner 基準で visitor ごとの閲覧可能範囲を定義できるようにする

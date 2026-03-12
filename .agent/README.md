@@ -16,6 +16,11 @@
 
 ## 進行中プラン一覧
 
+### `STEP26.md`
+- 朝ジョブの入力を前日 summary 依存から、前日分と直近3日分の `record/timeline/days/YYYY-MM-DD.md` 参照へ寄せる
+- 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する
+- `memory/` は使わず、持ち越し候補や未着手項目を daily record から拾う方針を固定する
+
 ### `STEP24.md`
 - `03:00` close ジョブの `summaryContextText` を廃止し、日次ログ Markdown を唯一の close 成果物に寄せる
 - 朝メッセージと X 投稿は notification state の内部サマリーではなく `record/timeline/days/YYYY-MM-DD.md` を直接読む構成へ切り替える

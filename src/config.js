@@ -66,6 +66,7 @@ export const config = {
       process.env.APP_BASE_URL ||
       process.env.SECRETARY_BASE_URL ||
       "",
+    publicCalendarUrl: process.env.PUBLIC_CALENDAR_URL || "",
     jobTimes: {
       morning: normalizeLocalTime(process.env.MORNING_JOB_TIME, '08:00:00'),
       night: normalizeLocalTime(process.env.NIGHT_JOB_TIME, '22:00:00'),

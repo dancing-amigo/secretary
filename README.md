@@ -6,6 +6,7 @@
 - バンクーバー時間の毎夜 `22:00` に、1日のまとめ送信を促すメッセージを送信
 - バンクーバー時間の毎日 `03:00` に、前日 `03:00-当日02:59:59` の日次ログを `record/timeline/days/YYYY-MM-DD.md` へ保存し、必要なら X 投稿する
 - LINE自由形式メッセージを owner / visitor で分岐し、owner には予定更新・一覧取得・`SOUL.md` / `USER.md` 編集・その他応答を返し、visitor にはオーナーの当日予定参照・`memory` 参照・一般応答だけを read-only で返す
+- visitor の予定照会では、公開 Google Calendar リンクを常に案内でき、`owner.today_agenda.basic` または `owner.today_agenda.detail` を持つ visitor にはそれぞれ要約または詳細な当日予定も返せる
 - Google Drive 上の `memory/` フォルダを長期記憶として段階探索し、人物、所属、過去イベント、継続プロジェクトなどの参照質問に返答する
 - 各処理開始前に当日 Google Calendar event を読取同期し、手動追加・編集された予定も判断材料に含める
 - アプリが作成・更新する event の description 先頭には `status` と `notifyOnEnd` を書き込み、完了状態と終了通知設定を保持する
@@ -33,6 +34,7 @@
 - `CLOSE_JOB_TIME`（既定: `03:00:00`）
 - `END_REMINDER_INTERVAL_MINUTES`（既定: `15`）
 - `PORT`（既定: `8787`）
+- `PUBLIC_CALENDAR_URL`（visitor 向けに案内する公開 Google Calendar リンク）
 - `CRON_SECRET`（`/api/jobs/*` 保護用）
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`

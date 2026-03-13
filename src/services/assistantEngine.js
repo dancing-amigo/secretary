@@ -17,9 +17,12 @@ import { answerFromMemory, answerFromMemoryWithMetadata } from './memoryAgent.js
 import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 import {
   AMBIGUOUS_VISITOR_MESSAGE,
+  OWNER_TODAY_AGENDA_BASIC_SCOPE,
+  OWNER_TODAY_AGENDA_DETAIL_SCOPE,
   UNREGISTERED_VISITOR_MESSAGE,
-  buildAgendaSources,
+  buildAgendaSourcesWithOptions,
   buildGeneralReplySource,
+  buildPublicCalendarSource,
   ensurePendingVisitorRegistered,
   registerVisitorFromOwnerText,
   resolveVisitorIdentity,
@@ -938,10 +941,13 @@ async function generateOthersReply({ text, dateContext, conversationContext, pro
 
 function formatAgendaList(events, options = {}) {
   const header = String(options.header || '').trim() || '今日の予定です。';
+  const includeDetail = Boolean(options.includeDetail);
+  const footer = String(options.footer || '').trim();
   if (events.length === 0) {
-    return header === '今日の予定です。'
+    const emptyMessage = header === '今日の予定です。'
       ? '今日の予定はありません。'
       : `${header}\n予定はありません。`;
+    return footer ? `${emptyMessage}\n\n${footer}` : emptyMessage;
   }
 
   const lines = [header];
@@ -951,6 +957,9 @@ function formatAgendaList(events, options = {}) {
       : `${formatAgendaTimeForDisplay(event.startTime) || '(start?)'}-${formatAgendaTimeForDisplay(event.endTime) || '(end?)'}`;
     lines.push(`${prefix} [${event.status}]`);
     lines.push(event.title);
+    if (includeDetail && String(event.detail || '').trim()) {
+      lines.push(`詳細: ${String(event.detail || '').trim()}`);
+    }
     lines.push('');
   }
 
@@ -958,7 +967,22 @@ function formatAgendaList(events, options = {}) {
     lines.pop();
   }
 
+  if (footer) {
+    lines.push('');
+    lines.push(footer);
+  }
+
   return lines.join('\n');
+}
+
+function buildPublicCalendarFooter(publicCalendarUrl = config.app.publicCalendarUrl) {
+  const normalizedUrl = String(publicCalendarUrl || '').trim();
+  return normalizedUrl ? `公開カレンダー: ${normalizedUrl}` : '';
+}
+
+function buildPublicCalendarOnlyReply(publicCalendarUrl = config.app.publicCalendarUrl) {
+  const footer = buildPublicCalendarFooter(publicCalendarUrl);
+  return footer ? `公開カレンダーはこちらです。\n${footer.replace(/^公開カレンダー:\s*/, '')}` : UNREGISTERED_VISITOR_MESSAGE;
 }
 
 function formatAgendaTimeForDisplay(value) {
@@ -1253,22 +1277,49 @@ async function processVisitorMessage(rawText, lineContext, deps = {}) {
   });
 
   if (actionPlan.action === 'list_events') {
-    if (visitorIdentity.status === 'unregistered') {
+    const publicCalendarFooter = buildPublicCalendarFooter();
+    const allowedScopes = new Set(visitorIdentity.scopePolicy?.allowedScopes || []);
+    const hasDetailAgendaScope = allowedScopes.has(OWNER_TODAY_AGENDA_DETAIL_SCOPE);
+    const hasBasicAgendaScope = hasDetailAgendaScope || allowedScopes.has(OWNER_TODAY_AGENDA_BASIC_SCOPE);
+    const events = Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [];
+    let candidateReply = '';
+    let sources = [];
+
+    if (visitorIdentity.status === 'registered' && hasDetailAgendaScope) {
+      candidateReply = formatAgendaList(events, {
+        header: 'このアカウントのオーナーの今日の予定です。',
+        includeDetail: true,
+        footer: publicCalendarFooter
+      });
+      sources = [
+        ...buildAgendaSourcesWithOptions(events, { includeDetail: true }),
+        ...(publicCalendarFooter ? [buildPublicCalendarSource(config.app.publicCalendarUrl)] : [])
+      ];
+    } else if (visitorIdentity.status === 'registered' && hasBasicAgendaScope) {
+      candidateReply = formatAgendaList(events, {
+        header: 'このアカウントのオーナーの今日の予定です。',
+        footer: publicCalendarFooter
+      });
+      sources = [
+        ...buildAgendaSourcesWithOptions(events),
+        ...(publicCalendarFooter ? [buildPublicCalendarSource(config.app.publicCalendarUrl)] : [])
+      ];
+    } else if (config.app.publicCalendarUrl) {
+      candidateReply = buildPublicCalendarOnlyReply();
+      sources = [buildPublicCalendarSource(config.app.publicCalendarUrl)];
+    } else if (visitorIdentity.status === 'unregistered') {
+      return UNREGISTERED_VISITOR_MESSAGE;
+    } else if (visitorIdentity.status === 'ambiguous') {
+      return AMBIGUOUS_VISITOR_MESSAGE;
+    } else {
       return UNREGISTERED_VISITOR_MESSAGE;
     }
-    if (visitorIdentity.status === 'ambiguous') {
-      return AMBIGUOUS_VISITOR_MESSAGE;
-    }
 
-    const candidateReply = formatAgendaList(
-      Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : [],
-      { header: 'このアカウントのオーナーの今日の予定です。' }
-    );
     const review = await reviewVisitorReplyImpl({
       text: rawText,
       candidateReply,
       visitorIdentity,
-      sources: buildAgendaSources(Array.isArray(calendarSnapshot.events) ? calendarSnapshot.events : []),
+      sources,
       profileContext
     });
     return review.message;

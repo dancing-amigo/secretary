@@ -71,6 +71,8 @@ export const AMBIGUOUS_VISITOR_MESSAGE =
   'このアカウントでは、あなた向けの案内設定をまだ特定できていません。オーナーに確認してください。';
 export const OWNER_INFO_DENIED_MESSAGE =
   'このアカウントのオーナーに関する情報は案内できません。';
+export const OWNER_TODAY_AGENDA_BASIC_SCOPE = 'owner.today_agenda.basic';
+export const OWNER_TODAY_AGENDA_DETAIL_SCOPE = 'owner.today_agenda.detail';
 
 function normalizeString(value, maxLength = 500) {
   return String(value || '').trim().replace(/\s+/g, ' ').slice(0, maxLength);
@@ -646,13 +648,20 @@ export async function reviewVisitorReply(
 }
 
 export function buildAgendaSources(events) {
+  return buildAgendaSourcesWithOptions(events);
+}
+
+export function buildAgendaSourcesWithOptions(events, options = {}) {
+  const scope = options.includeDetail ? OWNER_TODAY_AGENDA_DETAIL_SCOPE : OWNER_TODAY_AGENDA_BASIC_SCOPE;
   return Array.isArray(events)
     ? events.map((event) => ({
       kind: 'agenda',
       sourceId: normalizeString(event.eventId, 120) || 'agenda-item',
-      scope: 'owner.today_agenda.basic',
-      scopes: ['owner.today_agenda.basic'],
-      summary: `${event.allDay ? '終日' : `${String(event.startTime || '').slice(0, 5)}-${String(event.endTime || '').slice(0, 5)}`} ${event.title}`
+      scope,
+      scopes: [scope],
+      summary: options.includeDetail && String(event.detail || '').trim()
+        ? `${event.allDay ? '終日' : `${String(event.startTime || '').slice(0, 5)}-${String(event.endTime || '').slice(0, 5)}`} ${event.title} / detail: ${normalizeString(event.detail, 220)}`
+        : `${event.allDay ? '終日' : `${String(event.startTime || '').slice(0, 5)}-${String(event.endTime || '').slice(0, 5)}`} ${event.title}`
     }))
     : [];
 }
@@ -664,6 +673,16 @@ export function buildGeneralReplySource() {
     scope: '',
     scopes: [],
     summary: 'owner 固有情報に依存しない一般応答'
+  };
+}
+
+export function buildPublicCalendarSource(publicCalendarUrl) {
+  return {
+    kind: 'general',
+    sourceId: 'public-calendar-link',
+    scope: '',
+    scopes: [],
+    summary: normalizeString(publicCalendarUrl, 400) || '公開カレンダーリンク'
   };
 }
 

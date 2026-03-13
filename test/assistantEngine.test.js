@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { config } from '../src/config.js';
 import {
   ACTION_SCHEMA,
   AGENDA_REWRITE_SCHEMA,
@@ -18,6 +19,8 @@ import {
   prepareDailyClose,
   runMorningPlan
 } from '../src/services/assistantEngine.js';
+
+const ORIGINAL_PUBLIC_CALENDAR_URL = config.app.publicCalendarUrl;
 
 test('ACTION_SCHEMA includes memory action', () => {
   assert.ok(ACTION_SCHEMA.properties.action.enum.includes('memory'));
@@ -407,6 +410,7 @@ test('processLineMessage keeps owner route behavior for modify_events', async ()
 });
 
 test('processLineMessage returns owner agenda for visitor list_events', async () => {
+  config.app.publicCalendarUrl = 'https://calendar.example.com/public';
   const reply = await processLineMessage({
     senderUserId: 'visitor-1',
     ownerUserId: 'owner-1',
@@ -449,6 +453,7 @@ test('processLineMessage returns owner agenda for visitor list_events', async ()
     }),
     reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
       assert.equal(sources[0].scope, 'owner.today_agenda.basic');
+      assert.equal(sources[1].kind, 'general');
       return { decision: 'allow', message: candidateReply };
     }
   });
@@ -456,6 +461,8 @@ test('processLineMessage returns owner agenda for visitor list_events', async ()
   assert.match(reply, /^このアカウントのオーナーの今日の予定です。/);
   assert.match(reply, /10:00-11:00 \[todo\]/);
   assert.match(reply, /打ち合わせ/);
+  assert.match(reply, /https:\/\/calendar\.example\.com\/public/);
+  config.app.publicCalendarUrl = ORIGINAL_PUBLIC_CALENDAR_URL;
 });
 
 test('processLineMessage rejects visitor mutation requests without side effects', async () => {
@@ -613,6 +620,7 @@ test('processLineMessage handles owner register_visitor action', async () => {
 });
 
 test('processLineMessage records pending visitor and denies owner data for unregistered visitor list_events', async () => {
+  config.app.publicCalendarUrl = 'https://calendar.example.com/public';
   let pendingCalls = 0;
 
   const reply = await processLineMessage({
@@ -645,11 +653,17 @@ test('processLineMessage records pending visitor and denies owner data for unreg
       assert.equal(lineUserId, 'visitor-raw');
       assert.equal(ownerUserId, 'owner-1');
       assert.equal(latestMessage, '今日の予定は？');
+    },
+    reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
+      assert.equal(sources[0].kind, 'general');
+      return { decision: 'allow', message: candidateReply };
     }
   });
 
-  assert.match(reply, /まだ案内可能な情報が設定されていません/);
+  assert.match(reply, /公開カレンダーはこちらです/);
+  assert.match(reply, /https:\/\/calendar\.example\.com\/public/);
   assert.equal(pendingCalls, 1);
+  config.app.publicCalendarUrl = ORIGINAL_PUBLIC_CALENDAR_URL;
 });
 
 test('processLineMessage reviews unregistered visitor others replies as general answers', async () => {
@@ -687,4 +701,59 @@ test('processLineMessage reviews unregistered visitor others replies as general 
   });
 
   assert.equal(reply, 'こんにちは、どうしましたか？');
+});
+
+test('processLineMessage returns detailed agenda with public calendar link for detail scope visitor', async () => {
+  config.app.publicCalendarUrl = 'https://calendar.example.com/public';
+  const reply = await processLineMessage({
+    senderUserId: 'visitor-2',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '今日の予定は？'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async () => ({
+      text: '- 会話履歴なし'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({
+        events: [{
+          eventId: 'evt-1',
+          title: '打ち合わせ',
+          status: 'todo',
+          allDay: false,
+          startTime: '10:00:00',
+          endTime: '11:00:00',
+          detail: '研究進捗の確認',
+          notifyOnEnd: false
+        }]
+      })
+    }),
+    classifyVisitorActionImpl: async () => ({ action: 'list_events', reason: 'read only' }),
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'registered',
+      lineUserId: 'visitor-2',
+      personId: 'person-2',
+      personSummary: {
+        name: 'Visitor Two',
+        role: 'friend',
+        relationshipToOwner: 'friend'
+      },
+      scopePolicy: {
+        allowedScopes: ['owner.today_agenda.detail']
+      }
+    }),
+    reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
+      assert.equal(sources[0].scope, 'owner.today_agenda.detail');
+      return { decision: 'allow', message: candidateReply };
+    }
+  });
+
+  assert.match(reply, /詳細: 研究進捗の確認/);
+  assert.match(reply, /https:\/\/calendar\.example\.com\/public/);
+  config.app.publicCalendarUrl = ORIGINAL_PUBLIC_CALENDAR_URL;
 });

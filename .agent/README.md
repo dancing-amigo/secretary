@@ -24,11 +24,6 @@
 - transcript は将来の音声ファイル対応を見越した `audio processor` で処理し、ユーザー本人に関連する発話・思考・会話・記憶候補を抽出する
 - processor 出力を daily log 作成エージェントへ渡し、結果も `record/audio-processed` に永続保存できるようにする
 
-### `STEP28.md`
-- LINE の `userId` を memory の `People/*.md` と紐づけ、visitor が誰でどんな役割かを人物記憶から解決する
-- 人物記憶に role / relationship / allowedScopes を持たせ、owner 基準で visitor ごとの閲覧可能範囲を定義できるようにする
-- Step27 の read-only 候補返答をそのまま返さず、permission review 用 LLM で最終審査し、未登録 visitor や権限外情報を拒否・マスクする
-
 ### `STEP26.md`
 - 朝ジョブの入力を前日 summary 依存から、前日分と直近3日分の `record/timeline/days/YYYY-MM-DD.md` 参照へ寄せる
 - 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する
@@ -65,6 +60,11 @@
 - LINE webhook で送信者を owner / visitor に分岐し、visitor には read-only 専用フローを追加した
 - visitor は自分の会話履歴だけを使いながら、オーナーの今日の予定参照、`memory` 参照、一般質問応答だけを実行できる
 - visitor の予定更新、`SOUL.md` / `USER.md` 更新、記憶更新などの mutation は固定文面で拒否し、OpenAI の profile 注入点も将来差し替え可能に整理した
+
+### `STEP28.md`
+- LINE webhook の `userId` を `people/*.md` の人物記憶へ紐づけ、未登録 visitor は owner へ LINE で即時通知して承認登録できるようにした
+- owner の自然文メッセージを `register_visitor` アクションとして解釈し、人物記憶の frontmatter に LINE identity と visitor policy を保存できるようにした
+- visitor 向け `list_events` / `memory` / `others` を permission review へ通し、scope 外の owner 情報は拒否またはマスクする構成へ切り替えた
 
 ### `STEP1.md`
 - 自由文入力を LLM で解釈し、`save_tasks` / `list_tasks` / `others` を判定する基盤

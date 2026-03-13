@@ -11,6 +11,14 @@ const api = axios.create({
   timeout: 10000
 });
 
+const profileApi = axios.create({
+  baseURL: 'https://api.line.me/v2/bot',
+  headers: {
+    Authorization: `Bearer ${config.line.accessToken}`
+  },
+  timeout: 10000
+});
+
 export function verifyLineSignature(rawBody, signature) {
   if (!config.line.channelSecret || !signature) return false;
   const hmac = crypto
@@ -34,4 +42,20 @@ export async function pushMessage(userId, text) {
     to: userId,
     messages: [{ type: 'text', text: text.slice(0, 5000) }]
   });
+}
+
+export async function getUserProfile(userId) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) {
+    return null;
+  }
+
+  const response = await profileApi.get(`/profile/${normalizedUserId}`);
+  const displayName = String(response.data?.displayName || '').trim();
+  const userIdFromApi = String(response.data?.userId || normalizedUserId).trim();
+
+  return {
+    userId: userIdFromApi,
+    displayName
+  };
 }

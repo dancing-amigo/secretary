@@ -1,4 +1,4 @@
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { config } from '../config.js';
 import { readTextFileInDriveSubfolder } from './googleDriveState.js';
 
@@ -156,6 +156,39 @@ export function normalizeMemoryLinks(rawLinks) {
   }
 
   return collected.slice(0, 50);
+}
+
+export function normalizeMemoryAccessScopes(rawAccess) {
+  const scopes = Array.isArray(rawAccess?.scopes)
+    ? rawAccess.scopes
+    : typeof rawAccess?.scopes === 'string'
+      ? [rawAccess.scopes]
+      : [];
+
+  return Array.from(new Set(
+    scopes
+      .map((scope) => normalizeString(scope, 120))
+      .filter(Boolean)
+  )).slice(0, 20);
+}
+
+export function stringifyMemoryMarkdown({ frontmatter, body }) {
+  const normalizedFrontmatter =
+    frontmatter && typeof frontmatter === 'object' && !Array.isArray(frontmatter)
+      ? frontmatter
+      : {};
+  const yamlText = stringifyYaml(normalizedFrontmatter).trimEnd();
+  const normalizedBody = String(body || '').replace(/\r\n/g, '\n').trim();
+
+  if (!yamlText) {
+    return normalizedBody ? `${normalizedBody}\n` : '';
+  }
+
+  if (!normalizedBody) {
+    return `---\n${yamlText}\n---\n`;
+  }
+
+  return `---\n${yamlText}\n---\n\n${normalizedBody}\n`;
 }
 
 export async function readMemoryIndexMarkdown() {

@@ -9,6 +9,7 @@ const CONVERSATIONS_FOLDER_NAME = 'conversations';
 const SOUL_FILE_NAME = 'SOUL.md';
 const USER_FILE_NAME = 'USER.md';
 const DAILY_TIMELINE_FOLDER_PATH = ['record', 'timeline', 'days'];
+const VISITOR_REGISTRATION_STATE_FILE_NAME = 'visitor-registration-state.json';
 
 let cachedAccessToken = null;
 let cachedAccessTokenExpiresAt = 0;
@@ -75,6 +76,46 @@ function normalizeGoogleCalendarSyncState(state) {
   }
 
   return state;
+}
+
+function normalizeVisitorRegistrationRecord(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) {
+    return null;
+  }
+
+  const lineUserId = String(record.lineUserId || '').trim();
+  if (!lineUserId) {
+    return null;
+  }
+
+  const status = String(record.status || '').trim() === 'registered' ? 'registered' : 'pending';
+  return {
+    lineUserId,
+    displayName: String(record.displayName || '').trim(),
+    latestMessage: String(record.latestMessage || '').trim().slice(0, 5000),
+    lastSeenAt: String(record.lastSeenAt || '').trim(),
+    lastNotifiedAt: String(record.lastNotifiedAt || '').trim(),
+    status,
+    registeredPersonId: String(record.registeredPersonId || '').trim()
+  };
+}
+
+function normalizeVisitorRegistrationState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) {
+    return { pendingVisitors: {} };
+  }
+
+  const source = state.pendingVisitors && typeof state.pendingVisitors === 'object' && !Array.isArray(state.pendingVisitors)
+    ? state.pendingVisitors
+    : {};
+
+  return {
+    pendingVisitors: Object.fromEntries(
+      Object.entries(source)
+        .map(([lineUserId, record]) => [lineUserId, normalizeVisitorRegistrationRecord(record)])
+        .filter(([, record]) => Boolean(record))
+    )
+  };
 }
 
 function normalizeConversationTurn(turn) {
@@ -553,6 +594,38 @@ export async function readTextFileInDriveSubfolder({ folderName, relativePath })
   return readDriveTextFile(fileId);
 }
 
+export async function writeTextFileInDriveSubfolder({ folderName, relativePath, content, mimeType = 'text/markdown' }) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const normalizedFolderName = String(folderName || '').trim();
+  if (!normalizedFolderName) {
+    throw new Error('Google Drive folderName is required');
+  }
+
+  const folderId = await findDriveChildId({
+    parentId: config.googleDrive.folderId,
+    name: normalizedFolderName,
+    mimeType: 'application/vnd.google-apps.folder'
+  });
+  if (!folderId) {
+    throw new Error(`Google Drive folder not found: ${normalizedFolderName}`);
+  }
+
+  const pathSegments = normalizeDriveRelativePath(relativePath);
+  const fileId = await ensureDriveFileIdByPath({
+    parentId: folderId,
+    pathSegments,
+    mimeType,
+    initialContent: ''
+  });
+
+  await writeDriveTextFile(fileId, String(content || ''), mimeType);
+  return fileId;
+}
+
 async function writeDriveTextFile(fileId, content, mimeType = 'text/markdown') {
   await driveRequest({
     method: 'patch',
@@ -650,6 +723,42 @@ async function writeGoogleCalendarSyncState(state) {
     JSON.stringify(normalizedState, null, 2),
     'application/json'
   );
+}
+
+export async function readVisitorRegistrationState() {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findStateFileId({
+    name: VISITOR_REGISTRATION_STATE_FILE_NAME,
+    initialContent: { pendingVisitors: {} },
+    cacheKey: ''
+  });
+  const text = (await readDriveTextFile(fileId)).trim();
+  if (!text) return normalizeVisitorRegistrationState({});
+
+  try {
+    return normalizeVisitorRegistrationState(JSON.parse(text));
+  } catch {
+    return normalizeVisitorRegistrationState({});
+  }
+}
+
+export async function writeVisitorRegistrationState(state) {
+  const configError = driveStateConfigError();
+  if (configError) {
+    throw new Error(configError);
+  }
+
+  const fileId = await findStateFileId({
+    name: VISITOR_REGISTRATION_STATE_FILE_NAME,
+    initialContent: { pendingVisitors: {} },
+    cacheKey: ''
+  });
+  const normalizedState = normalizeVisitorRegistrationState(state);
+  await writeDriveTextFile(fileId, JSON.stringify(normalizedState, null, 2), 'application/json');
 }
 
 function getDateKeyInTimeZone(date, timeZone = config.tz) {

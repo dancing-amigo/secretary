@@ -21,6 +21,7 @@ import {
 
 test('ACTION_SCHEMA includes memory action', () => {
   assert.ok(ACTION_SCHEMA.properties.action.enum.includes('memory'));
+  assert.ok(ACTION_SCHEMA.properties.action.enum.includes('register_visitor'));
 });
 
 test('buildActionPrompt explains when memory should be selected', () => {
@@ -33,8 +34,9 @@ test('buildActionPrompt explains when memory should be selected', () => {
     agendaContext: '- 予定なし'
   });
 
-  assert.match(prompt, /次の6つから必ず1つだけ選んでください。/);
+  assert.match(prompt, /次の7つから必ず1つだけ選んでください。/);
   assert.match(prompt, /- memory: /);
+  assert.match(prompt, /- register_visitor: /);
   assert.match(prompt, /長期に保持された人物、所属、過去イベント、継続プロジェクト、背景事情などの記憶参照が主目的なら memory を選ぶ。/);
 });
 
@@ -431,6 +433,23 @@ test('processLineMessage returns owner agenda for visitor list_events', async ()
       assert.equal(conversationContext.text, 'conversation:visitor-1');
       assert.equal(profileContext.scope, 'owner_readonly');
       return { action: 'list_events', reason: 'read only' };
+    },
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'registered',
+      lineUserId: 'visitor-1',
+      personId: 'person-1',
+      personSummary: {
+        name: 'Visitor One',
+        role: 'friend',
+        relationshipToOwner: 'friend'
+      },
+      scopePolicy: {
+        allowedScopes: ['owner.today_agenda.basic']
+      }
+    }),
+    reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
+      assert.equal(sources[0].scope, 'owner.today_agenda.basic');
+      return { decision: 'allow', message: candidateReply };
     }
   });
 
@@ -458,6 +477,17 @@ test('processLineMessage rejects visitor mutation requests without side effects'
     }),
     createExecutionContextImpl: () => ({
       getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'registered',
+      lineUserId: 'visitor-1',
+      personId: 'person-1',
+      personSummary: {
+        name: 'Visitor One',
+        role: '',
+        relationshipToOwner: ''
+      },
+      scopePolicy: { allowedScopes: [] }
     }),
     classifyVisitorActionImpl: async () => ({ action: 'forbidden_action', reason: 'mutation' }),
     reconcileAgendaEventsForDateImpl: async () => {
@@ -490,13 +520,37 @@ test('processLineMessage uses sender conversation for visitor memory and others'
     createExecutionContextImpl: () => ({
       getCalendarSnapshot: async () => ({ events: [] })
     }),
-    answerFromMemoryImpl: async ({ conversationContext, profileContext }) => {
+    answerFromMemoryWithMetadataImpl: async ({ conversationContext, profileContext }) => {
       calls.push(['memory', conversationContext.text, profileContext?.scope]);
-      return 'memory reply';
+      return {
+        reply: 'memory reply',
+        sources: [{
+          kind: 'memory',
+          sourceId: 'memory-1',
+          scope: 'owner.memory.people',
+          scopes: ['owner.memory.people'],
+          summary: 'memory summary'
+        }]
+      };
     },
     generateOthersReplyImpl: async ({ conversationContext, profileContext }) => {
       calls.push(['others', conversationContext.text, profileContext?.scope]);
       return 'others reply';
+    },
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'registered',
+      lineUserId: 'visitor-1',
+      personId: 'person-1',
+      personSummary: {
+        name: 'Visitor One',
+        role: '',
+        relationshipToOwner: ''
+      },
+      scopePolicy: { allowedScopes: ['owner.memory.people'] }
+    }),
+    reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
+      calls.push(['review', sources[0]?.kind || 'none']);
+      return { decision: 'allow', message: candidateReply };
     }
   };
 
@@ -524,6 +578,113 @@ test('processLineMessage uses sender conversation for visitor memory and others'
   assert.equal(othersReply, 'others reply');
   assert.deepEqual(calls, [
     ['memory', 'conversation:visitor-1', 'owner_readonly'],
-    ['others', 'conversation:visitor-1', 'owner_readonly']
+    ['review', 'memory'],
+    ['others', 'conversation:visitor-1', 'owner_readonly'],
+    ['review', 'general']
   ]);
+});
+
+test('processLineMessage handles owner register_visitor action', async () => {
+  const reply = await processLineMessage({
+    senderUserId: 'owner-1',
+    ownerUserId: 'owner-1',
+    senderRole: 'owner',
+    text: 'さっきの人を山本圭亮として登録して'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async () => ({
+      text: '- 会話履歴なし'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    classifyActionImpl: async () => ({ action: 'register_visitor', reason: 'visitor registration' }),
+    registerVisitorFromOwnerTextImpl: async () => ({
+      outcome: 'updated',
+      message: '山本圭亮として登録しました。'
+    })
+  });
+
+  assert.equal(reply, '山本圭亮として登録しました。');
+});
+
+test('processLineMessage records pending visitor and denies owner data for unregistered visitor list_events', async () => {
+  let pendingCalls = 0;
+
+  const reply = await processLineMessage({
+    senderUserId: 'visitor-raw',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: '今日の予定は？'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async () => ({
+      text: '- 会話履歴なし'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    classifyVisitorActionImpl: async () => ({ action: 'list_events', reason: 'ask agenda' }),
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'unregistered',
+      lineUserId: 'visitor-raw',
+      personId: '',
+      personSummary: null,
+      scopePolicy: { allowedScopes: [] }
+    }),
+    ensurePendingVisitorRegisteredImpl: async ({ lineUserId, ownerUserId, latestMessage }) => {
+      pendingCalls += 1;
+      assert.equal(lineUserId, 'visitor-raw');
+      assert.equal(ownerUserId, 'owner-1');
+      assert.equal(latestMessage, '今日の予定は？');
+    }
+  });
+
+  assert.match(reply, /まだ案内可能な情報が設定されていません/);
+  assert.equal(pendingCalls, 1);
+});
+
+test('processLineMessage reviews unregistered visitor others replies as general answers', async () => {
+  const reply = await processLineMessage({
+    senderUserId: 'visitor-raw',
+    ownerUserId: 'owner-1',
+    senderRole: 'visitor',
+    text: 'こんにちは'
+  }, {
+    getLocalDateContextImpl: () => ({
+      dateKey: '2026-03-12',
+      localTime: '09:00:00',
+      timeZone: 'UTC'
+    }),
+    loadConversationContextImpl: async () => ({
+      text: '- 会話履歴なし'
+    }),
+    createExecutionContextImpl: () => ({
+      getCalendarSnapshot: async () => ({ events: [] })
+    }),
+    classifyVisitorActionImpl: async () => ({ action: 'others', reason: 'chat' }),
+    resolveVisitorIdentityImpl: async () => ({
+      status: 'unregistered',
+      lineUserId: 'visitor-raw',
+      personId: '',
+      personSummary: null,
+      scopePolicy: { allowedScopes: [] }
+    }),
+    ensurePendingVisitorRegisteredImpl: async () => {},
+    generateOthersReplyImpl: async () => 'こんにちは、どうしましたか？',
+    reviewVisitorReplyImpl: async ({ candidateReply, sources }) => {
+      assert.equal(sources[0].kind, 'general');
+      return { decision: 'allow', message: candidateReply };
+    }
+  });
+
+  assert.equal(reply, 'こんにちは、どうしましたか？');
 });

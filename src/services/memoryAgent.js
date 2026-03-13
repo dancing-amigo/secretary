@@ -2,6 +2,7 @@ import { config } from '../config.js';
 import { createStructuredOutput, createTextOutput } from './openaiClient.js';
 import {
   loadMemoryStore,
+  normalizeMemoryAccessScopes,
   readMemoryNodeContent,
   resolveLinkedRegistryEntries
 } from './memoryStore.js';
@@ -340,7 +341,23 @@ function normalizeMemoryReply(value) {
   return normalized || '関連する記憶は見つかりませんでした。';
 }
 
-export async function answerFromMemory(
+function buildMemoryReplySources(nodes) {
+  return nodes.map((node) => {
+    const scopes = normalizeMemoryAccessScopes(node.frontmatter?.access);
+    return {
+      kind: 'memory',
+      sourceId: node.entry.id,
+      scope: scopes[0] || '',
+      scopes,
+      summary: String(node.entry.description || node.frontmatter?.description || node.body || '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .slice(0, 280)
+    };
+  });
+}
+
+export async function answerFromMemoryWithMetadata(
   { text, conversationContext, dateContext, profileContext },
   deps = {}
 ) {
@@ -422,15 +439,26 @@ export async function answerFromMemory(
       secondaryNodeIds: secondaryNodes.map((node) => node.entry.id),
       readFiles: Array.from(new Set(readFiles))
     });
-    return normalizedReply;
+    return {
+      reply: normalizedReply,
+      sources: buildMemoryReplySources([...primaryNodes, ...secondaryNodes])
+    };
   } catch (error) {
     console.error('[memory-agent] failed', {
       ...logContext,
       readFiles: Array.from(new Set(readFiles)),
       error: String(error?.message || error)
     });
-    return MEMORY_FAILURE_MESSAGE;
+    return {
+      reply: MEMORY_FAILURE_MESSAGE,
+      sources: []
+    };
   }
+}
+
+export async function answerFromMemory(args, deps = {}) {
+  const result = await answerFromMemoryWithMetadata(args, deps);
+  return result.reply;
 }
 
 export const memoryAgentInternals = {
@@ -440,6 +468,7 @@ export const memoryAgentInternals = {
   formatRegistrySummary,
   formatSecondaryCandidateSummary,
   normalizeMemoryReply,
+  buildMemoryReplySources,
   selectPrimaryNodes,
   selectSecondaryNodes,
   generateMemoryReply

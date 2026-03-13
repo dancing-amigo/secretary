@@ -24,6 +24,11 @@
 - transcript は将来の音声ファイル対応を見越した `audio processor` で処理し、ユーザー本人に関連する発話・思考・会話・記憶候補を抽出する
 - processor 出力を daily log 作成エージェントへ渡し、結果も `record/audio-processed` に永続保存できるようにする
 
+### `STEP30.md`
+- scope の正本をコードから `memory/scopes.yaml` へ移し、`id` ベースで一元管理できるようにする
+- `03:00` close の memory 更新に `scopeOps` を追加し、AI が scope の作成・更新・付与・剥奪を自動適用できるようにする
+- person / organization の権限と各 memory node の所属 scope を registry 参照に統一し、permission review も registry 基準へ切り替える
+
 ### `STEP26.md`
 - 朝ジョブの入力を前日 summary 依存から、前日分と直近3日分の `record/timeline/days/YYYY-MM-DD.md` 参照へ寄せる
 - 当日 Calendar event と直近 daily record を材料に、確定計画ではなく「今日やる候補」を複数提案する朝メッセージへ再設計する
@@ -32,7 +37,7 @@
 ### `STEP25.md`
 - `03:00` close ジョブで、前日分 `record/timeline/days/YYYY-MM-DD.md` を入力にした memory 更新を 1 日 1 回追加する
 - memory 更新は既存ノード更新、新規ノード作成、`node-registry.yaml` 更新、必要な双方向リンク更新まで含める
-- 失敗しても close ジョブ本体は継続し、結果は notification state と Vercel log に記録する
+- scope 管理はこの Step には含めず、将来 Step30 で `memory/scopes.yaml` と `scopeOps` を追加できるよう責務を分けておく
 
 ## 完了済みプラン一覧
 
